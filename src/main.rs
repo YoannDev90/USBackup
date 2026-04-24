@@ -1,99 +1,14 @@
 use colored::Colorize;
 use nusb::hotplug::HotplugEvent;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fs;
-use std::io::{self, Write};
-use std::path::Path;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum DeviceAction {
-    Whitelist,
-    IgnoreForever,
-    AskEachTime,
-}
+mod handler;
+mod models;
+mod notifications;
+mod storage;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct BackupRule {
-    pub source_path: String,
-    pub destination_path: String,
-    pub exclude: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct DeviceConfig {
-    pub name: String,
-    pub vendor_id: u16,
-    pub product_id: u16,
-    pub action: DeviceAction,
-    pub backup_rules: Vec<BackupRule>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct AppConfig {
-    pub devices: HashMap<String, DeviceConfig>,
-}
-
-const CONFIG_PATH: &str = "backup_config.json";
-
-fn load_config() -> AppConfig {
-    if Path::new(CONFIG_PATH).exists() {
-        let content = fs::read_to_string(CONFIG_PATH).expect("Erreur de lecture config");
-        serde_json::from_str(&content).unwrap_or(AppConfig {
-            devices: HashMap::new(),
-        })
-    } else {
-        AppConfig {
-            devices: HashMap::new(),
-        }
-    }
-}
-
-fn save_config(config: &AppConfig) {
-    let content = serde_json::to_string_pretty(config).expect("Erreur de sérialisation");
-    fs::write(CONFIG_PATH, content).expect("Erreur d'écriture config");
-}
-
-pub fn trigger_backup(device_config: &DeviceConfig) {
-    println!(
-        "{} Lancement des sauvegardes pour : {}",
-        " -> ".blue(),
-        device_config.name.green()
-    );
-    for rule in &device_config.backup_rules {
-        println!(
-            "   {} Synchronisation {} vers {}",
-            " • ".cyan(),
-            rule.source_path.yellow(),
-            rule.destination_path.yellow()
-        );
-        // Ici : Logique de copie
-    }
-}
-
-fn ask_user_action(vid: u16, pid: u16, product: &str) -> DeviceAction {
-    println!(
-        "\n{}",
-        "=== Nouveau péripherique détecté ===".bright_magenta()
-    );
-    println!("Produit : {}", product.bright_white());
-    println!("ID : {:04x}:{:04x}", vid, pid);
-    println!("Que voulez-vous faire ?");
-    println!("1. Whitelister (Ajouter à la config)");
-    println!("2. Ignorer pour toujours");
-    println!("3. Me redemander la prochaine fois");
-
-    print!("Votre choix (1-3) : ");
-    io::stdout().flush().unwrap();
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).unwrap();
-    match input.trim() {
-        "1" => DeviceAction::Whitelist,
-        "2" => DeviceAction::IgnoreForever,
-        _ => DeviceAction::AskEachTime,
-    }
-}
+use crate::handler::{ask_user_action, handle_error, trigger_backup};
+use crate::models::device::{BackupRule, DeviceAction, DeviceConfig};
+use crate::storage::{load_config, save_config};
 
 fn main() {
     println!("{}", "=== USBackup : Agent 24h/24 ===".bright_yellow());
