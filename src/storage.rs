@@ -22,8 +22,7 @@ pub fn load_config() -> AppConfig {
     }
 }
 
-#[allow(dead_code)]
-pub fn save_config(config: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {
+pub fn save_config(config: &AppConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let content = serde_json::to_string_pretty(config)?;
     fs::write(CONFIG_PATH, content)?;
     Ok(())

@@ -12,6 +12,12 @@ pub struct BackupRule {
     pub source_path: String,
     pub destination_path: String,
     pub exclude: Vec<String>,
+    #[serde(default = "default_delete")]
+    pub delete_missing: bool,
+}
+
+fn default_delete() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
