@@ -23,7 +23,7 @@ fn fetch_gitignore_templates(
         .user_agent("USBackup-Agent")
         .build()?;
 
-    info!("Récupération des templates .gitignore depuis GitHub...");
+    info!("Fetching .gitignore templates from GitHub...");
     let resp: Vec<GithubContent> = client
         .get("https://api.github.com/repos/github/gitignore/contents")
         .send()?
@@ -64,24 +64,24 @@ pub async fn run_wizard(
     product: &str,
     config: &mut AppConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    println!("\n🚀 Assistant de configuration pour : {}", product);
+    println!("\n🚀 Configuration assistant for: {}", product);
 
     let device_key = format!("{:04x}:{:04x}", vid, pid);
     let name: String = Input::new()
-        .with_prompt("Nom amical pour ce périphérique")
+        .with_prompt("Friendly name for this device")
         .default(product.into())
         .interact_text()?;
 
-    // 1. Sélectionner le point de montage de la clé pour trouver la destination
-    info!("Recherche d'un point de montage pour le périphérique (timeout 30s)...");
+    // 1. Select the mount point of the key to find the destination
+    info!("Searching for a mount point for the device (timeout 30s)...");
     let mut disks = Disks::new();
     let mut mount_info = Vec::new();
 
     for i in 0..15 {
-        // Tenter le montage actif
+        // Attempt active mount
         let usb_parts = find_usb_partitions();
         debug!(
-            "[Essai {}] Partitions USB détectées par udev: {:?}",
+            "[Attempt {}] USB partitions detected by udev: {:?}",
             i + 1,
             usb_parts
         );
@@ -96,10 +96,10 @@ pub async fn run_wizard(
 
             if let Ok(out) = status {
                 if out.status.success() {
-                    info!("Montage réussi pour {}", part);
+                    info!("Mount successful for {}", part);
                 } else {
                     debug!(
-                        "Echec montage {} : {}",
+                        "Mount failed for {} : {}",
                         part,
                         String::from_utf8_lossy(&out.stderr).trim()
                     );
@@ -114,7 +114,7 @@ pub async fn run_wizard(
             .filter(|d| {
                 let mount = d.mount_point().to_string_lossy();
                 debug!(
-                    "Examen du disque: {} | Mount: {}",
+                    "Examining disk: {} | Mount: {}",
                     d.name().to_string_lossy(),
                     mount
                 );
@@ -124,54 +124,53 @@ pub async fn run_wizard(
                 let name = d.name().to_string_lossy();
                 let mount = d.mount_point().to_string_lossy();
                 let size_gb = d.total_space() / 1024 / 1024 / 1024;
-                format!("{} ({} Go) sur {}", name, size_gb, mount)
+                format!("{} ({} GB) on {}", name, size_gb, mount)
             })
             .collect();
 
         if !mount_info.is_empty() {
-            info!("Points de montage trouvés !");
+            info!("Mount points found!");
             break;
         }
 
         if i < 14 {
-            debug!("Aucun point de montage trouvé, attente de 2s...");
+            debug!("No mount point found, waiting 2s...");
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         }
     }
 
     if mount_info.is_empty() {
         return Err(
-            "Aucun disque externe (clé USB) n'a été détecté. Assurez-vous qu'elle est bien montée."
-                .into(),
+            "No external disk (USB key) detected. Please make sure it is properly mounted.".into(),
         );
     }
 
     let selection = Select::new()
-        .with_prompt("Quel est votre disque USB ?")
+        .with_prompt("Which one is your USB disk?")
         .items(&mount_info)
         .default(0)
         .interact()?;
 
-    let chosen_path = mount_info[selection].split(" sur ").last().unwrap();
+    let chosen_path = mount_info[selection].split(" on ").last().unwrap();
     let usb_root = PathBuf::from(chosen_path);
 
-    // 2. Sélectionner le dossier de destination SUR la clé
+    // 2. Select the destination folder ON the key
     let dest_folder: String = Input::new()
-        .with_prompt("Dossier de destination sur la clé (ex: backups/mon_pc)")
+        .with_prompt("Destination folder on the key (e.g., backups/my_pc)")
         .default("backups/default".into())
         .interact_text()?;
 
     let full_dest = usb_root.join(dest_folder.trim_start_matches('/'));
 
-    // 3. Sélectionner les dossiers sources à sauvegarder (UI simplifiée)
+    // 3. Select source folders to backup (simplified UI)
     let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
     let common_dirs = vec![
         "Documents",
-        "Images",
-        "Bureau",
-        "Musique",
-        "Vidéos",
-        "Projets",
+        "Pictures",
+        "Desktop",
+        "Music",
+        "Videos",
+        "Projects",
     ];
     let mut available_sources = Vec::new();
 
@@ -183,17 +182,25 @@ pub async fn run_wizard(
     }
 
     let chosen_indices = MultiSelect::new()
-        .with_prompt("Quels dossiers voulez-vous cloner automatiquement ? (Espace pour cocher)")
+        .with_prompt("Which folders do you want to clone automatically? (Space to check)")
         .items(&available_sources)
         .interact()?;
 
-    // 4. Définir des exclusions
+    // 4. Set exclusions
     let mut rules = Vec::new();
     let setup_exclusions = Confirm::new()
-        .with_prompt("Voulez-vous configurer des exclusions via templates .gitignore (GitHub) ?")
+        .with_prompt("Do you want to configure exclusions via .gitignore templates (GitHub)?")
         .interact()?;
 
-    let mut exclusions = Vec::new();
+    // Load default exclusions packaged in the binary
+    let default_excludes_str = include_str!("exclude_list.txt");
+    let mut exclusions: Vec<String> = default_excludes_str
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with("//"))
+        .map(|l| l.to_string())
+        .collect();
+
     if setup_exclusions {
         let templates_res = tokio::task::spawn_blocking(fetch_gitignore_templates).await;
 
@@ -202,12 +209,12 @@ pub async fn run_wizard(
 
             loop {
                 let selection = FuzzySelect::new()
-                    .with_prompt("Sélectionnez un template .gitignore (Echap/Vide pour terminer)")
+                    .with_prompt("Select a .gitignore template (Esc/Empty to finish)")
                     .items(&template_names)
                     .interact_opt()?;
 
                 if let Some(idx) = selection {
-                    info!("Téléchargement du template {}...", templates[idx].0);
+                    info!("Downloading template {}...", templates[idx].0);
                     let url = templates[idx].1.clone();
                     let download_res =
                         tokio::task::spawn_blocking(move || download_gitignore(&url)).await;
@@ -215,16 +222,16 @@ pub async fn run_wizard(
                     match download_res {
                         Ok(Ok(mut patterns)) => {
                             info!(
-                                "{} patterns ajoutés depuis {}",
+                                "{} patterns added from {}",
                                 patterns.len(),
                                 templates[idx].0
                             );
                             exclusions.append(&mut patterns);
                         }
-                        _ => error!("Erreur lors du téléchargement."),
+                        _ => error!("Error during download."),
                     }
                     if !Confirm::new()
-                        .with_prompt("Ajouter un autre template ?")
+                        .with_prompt("Add another template?")
                         .interact()?
                     {
                         break;
@@ -234,15 +241,13 @@ pub async fn run_wizard(
                 }
             }
         } else {
-            warn!(
-                "Impossible de récupérer les templates depuis GitHub. Passage en saisie manuelle."
-            );
+            warn!("Unable to fetch templates from GitHub. Falling back to manual entry.");
         }
 
-        println!("\nSyntaxe .gitignore acceptée (ex: node_modules/, *.log, temp/**). Laissez vide pour terminer.");
+        println!("\nAccepted .gitignore syntax (e.g., node_modules/, *.log, temp/**). Leave empty to finish.");
         loop {
             let pattern: String = Input::new()
-                .with_prompt("Mot-clé personnalisé ou pattern (.gitignore style)")
+                .with_prompt("Custom keyword or pattern (.gitignore style)")
                 .allow_empty(true)
                 .interact_text()?;
 
@@ -254,7 +259,7 @@ pub async fn run_wizard(
     }
 
     let delete_missing = Confirm::new()
-        .with_prompt("Voulez-vous supprimer les fichiers sur la clé s'ils sont supprimés de la source (miroir exact) ?")
+        .with_prompt("Do you want to delete files on the key if they are deleted from the source (exact mirror)?")
         .default(true)
         .interact()?;
 
@@ -295,7 +300,7 @@ fn find_usb_partitions() -> Vec<String> {
     if let Ok(devices) = enumerator.scan_devices() {
         for device in devices {
             if let Some(devnode) = device.devnode() {
-                debug!("udev examine : {:?}", devnode);
+                debug!("udev examining: {:?}", devnode);
             }
             let mut current = Some(device.clone());
             let mut is_usb = false;
@@ -311,7 +316,7 @@ fn find_usb_partitions() -> Vec<String> {
 
             if is_usb {
                 if let Some(devnode) = device.devnode() {
-                    debug!("Partition USB trouvée via udev : {:?}", devnode);
+                    debug!("USB Partition found via udev: {:?}", devnode);
                     partitions.push(devnode.to_string_lossy().to_string());
                 }
             }
@@ -321,23 +326,23 @@ fn find_usb_partitions() -> Vec<String> {
 }
 
 pub async fn trigger_backup(device_config: &crate::models::device::DeviceConfig) {
-    info!("Préparation du backup pour {}", device_config.name);
+    info!("Preparing backup for {}", device_config.name);
 
-    // Détection des disques via sysinfo (Cross-platform) avec retries
+    // Disk detection via sysinfo (Cross-platform) with retries
     let mut found_mount_point = None;
     let mut attempts = 0;
 
-    debug!("Surveillance du montage (30 tentatives)...");
+    debug!("Monitoring mount (30 attempts)...");
 
     while attempts < 30 && found_mount_point.is_none() {
         if attempts > 0 {
             tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
         }
 
-        // TENTER LE MONTAGE À CHAQUE ESSAI si non monté
+        // ATTEMPT MOUNT ON EVERY TRY if not mounted
         let usb_parts = find_usb_partitions();
         for part in usb_parts {
-            // On tente de monter toutes les partitions USB trouvées via udisksctl (Linux)
+            // Attempt to mount all found USB partitions via udisksctl (Linux)
             let status = TokioCommand::new("udisksctl")
                 .arg("mount")
                 .arg("-b")
@@ -348,14 +353,14 @@ pub async fn trigger_backup(device_config: &crate::models::device::DeviceConfig)
             if let Ok(out) = status {
                 if out.status.success() {
                     let msg = String::from_utf8_lossy(&out.stdout);
-                    info!("Montage réussi : {}", msg.trim());
+                    info!("Mount successful: {}", msg.trim());
                 }
             }
         }
 
         let disks = Disks::new_with_refreshed_list();
 
-        // Debug additionnel : affiche la sortie de lsblk pendant l'essai
+        // Additional debug: show lsblk output during the attempt
         if attempts % 5 == 0 {
             let lsblk_out = TokioCommand::new("lsblk")
                 .arg("-o")
@@ -373,14 +378,14 @@ pub async fn trigger_backup(device_config: &crate::models::device::DeviceConfig)
             let file_system = disk.file_system().to_string_lossy();
 
             debug!(
-                "[Essai {}] Disque trouvé: {} | Mount: {} | FS: {}",
+                "[Attempt {}] Disk found: {} | Mount: {} | FS: {}",
                 attempts + 1,
                 name,
                 mount_point,
                 file_system
             );
 
-            // Stratégie de détection améliorée
+            // Improved detection strategy
             let is_removable =
                 mount_point.contains("/media/") || mount_point.contains("/run/media/");
 
@@ -400,28 +405,28 @@ pub async fn trigger_backup(device_config: &crate::models::device::DeviceConfig)
     }
 
     if let Some(usb_path) = found_mount_point {
-        info!("Disque détecté sur : {:?}", usb_path);
+        info!("Disk detected on: {:?}", usb_path);
 
         notifications::notify_backup_start(&device_config.name);
 
         for rule in &device_config.backup_rules {
             let full_dest = usb_path.join(rule.destination_path.trim_start_matches('/'));
 
-            info!("Synchronisation {} vers {:?}", rule.source_path, full_dest);
+            info!("Syncing {} to {:?}", rule.source_path, full_dest);
 
-            // Vérifier si la source existe
+            // Check if source exists
             if !Path::new(&rule.source_path).exists() {
-                error!("Source inexistante : {}", rule.source_path);
+                error!("Source missing: {}", rule.source_path);
                 continue;
             }
 
-            // Créer le répertoire de destination s'il n'existe pas
+            // Create destination directory if it doesn't exist
             if let Err(e) = std::fs::create_dir_all(&full_dest) {
-                error!("Impossible de créer la destination {:?} : {}", full_dest, e);
+                error!("Unable to create destination {:?}: {}", full_dest, e);
                 continue;
             }
 
-            // Utilisation de rsync pour une synchronisation efficace
+            // Use rsync for efficient synchronization
             let mut cmd = TokioCommand::new("rsync");
             cmd.arg("-avz");
 
@@ -429,7 +434,7 @@ pub async fn trigger_backup(device_config: &crate::models::device::DeviceConfig)
                 cmd.arg("--delete");
             }
 
-            // Ajout des exclusions
+            // Add exclusions
             for pattern in &rule.exclude {
                 cmd.arg(format!("--exclude={}", pattern));
             }
@@ -437,20 +442,17 @@ pub async fn trigger_backup(device_config: &crate::models::device::DeviceConfig)
             let status = cmd.arg(&rule.source_path).arg(&full_dest).status().await;
 
             match status {
-                Ok(s) if s.success() => info!("Succès pour {}", rule.source_path),
-                Ok(s) => error!(
-                    "Rsync a échoué avec le code {} pour {}",
-                    s, rule.source_path
-                ),
-                Err(e) => error!("Erreur lors de l'exécution de rsync : {}", e),
+                Ok(s) if s.success() => info!("Success for {}", rule.source_path),
+                Ok(s) => error!("Rsync failed with code {} for {}", s, rule.source_path),
+                Err(e) => error!("Error during rsync execution: {}", e),
             }
         }
     } else {
-        warn!("Impossible de localiser le point de montage.");
+        warn!("Unable to locate mount point.");
         return;
     }
 
     notifications::notify_backup_success(&device_config.name);
 }
 
-// Code pour ask_user_action supprimé car incompatible avec le mode TUI actuel.
+// Code for ask_user_action removed as incompatible with the current TUI mode.

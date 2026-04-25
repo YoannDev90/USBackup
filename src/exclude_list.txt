@@ -1,0 +1,26 @@
+// Dependency and build folders
+.git/
+node_modules/
+.venv/
+venv/
+__pycache__/
+target/
+bin/
+obj/
+.gradle/
+.idea/
+.vscode/
+
+// System and temporary files
+.DS_Store
+Thumbs.db
+desktop.ini
+*.tmp
+*.bak
+*.swp
+~*
+
+// Recycle bins
+.Trash-*/
+$RECYCLE.BIN/
+
