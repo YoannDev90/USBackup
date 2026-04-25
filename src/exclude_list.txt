@@ -1,26 +1,64 @@
 // Dependency and build folders
 .git/
+.hg/
+.svn/
 node_modules/
+bower_components/
 .venv/
 venv/
+env/
 __pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 target/
+build/
+dist/
+out/
 bin/
 obj/
 .gradle/
+.m2/
 .idea/
 .vscode/
+.next/
+.nuxt/
+.cache/
+.sass-cache/
+.parcel-cache/
 
 // System and temporary files
 .DS_Store
+.DS_Store?
+.AppleDouble
+.LSOverride
 Thumbs.db
 desktop.ini
+$RECYCLE.BIN/
+.Trash-*/
+*~
 *.tmp
 *.bak
+*.old
 *.swp
-~*
+*.swo
+*.log
+*.pid
+*.seed
+*.lock
+*.part
+*.crdownload
 
-// Recycle bins
-.Trash-*/
-$RECYCLE.BIN/
+// Large media/package caches
+.npm/
+.yarn/
+.electron/
+.cargo/registry/
+.cargo/git/
+
+// OS specific
+lost+found/
+.Trashes/
+.Spotlight-V100/
+.fseventsd/
 
