@@ -8,7 +8,7 @@ mod storage;
 use crate::handler::trigger_backup;
 use crate::models::device::DeviceAction;
 use crate::storage::load_config;
-use log::{error, info};
+use log::{error, info, warn};
 use std::process::Command;
 
 fn check_dependencies() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -53,44 +53,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
                 info!("[+] Appareil détecté : {} ({})", product, device_key);
 
-                // Recharger la config à chaque connexion pour être à jour
-                let mut config = load_config();
+                // Recharger la config des UUID approuvés
+                let config = load_config();
 
-                if let Some(dev_conf) = config.devices.get(&device_key).cloned() {
-                    if dev_conf.action == DeviceAction::Whitelist {
+                // Chercher l'UUID de cet appareil
+                let mut device_uuid = None;
+                let parts = crate::handler::udev_utils::find_usb_partitions();
+                for part in parts {
+                    if let Some(u) = crate::handler::udev_utils::get_partition_uuid(&part) {
+                        device_uuid = Some(u);
+                        break;
+                    }
+                }
+
+                if let Some(uuid) = device_uuid {
+                    if config.approved_uuids.contains(&uuid) {
+                        // L'appareil est approuvé, on cherche sa config locale sur la clé
                         tokio::spawn(async move {
-                            trigger_backup(&dev_conf).await;
+                            // On attend que la clé soit montée pour lire sa config
+                            if let Some(dev_conf) =
+                                crate::handler::trigger_backup_by_uuid(vid, pid, &uuid).await
+                            {
+                                info!("Backup terminée pour {}", dev_conf.name);
+                            }
+                        });
+                    } else {
+                        // Nouveau périphérique ou non approuvé
+                        let product_clone = product.clone();
+                        tokio::task::spawn_blocking(move || {
+                            if dialoguer::Confirm::new()
+                                .with_prompt(format!(
+                                    "Nouveau périphérique ({}) détecté. Voulez-vous approuver cet UUID ({}) ?",
+                                    product_clone, uuid
+                                ))
+                                .default(false)
+                                .interact()
+                                .unwrap_or(false)
+                            {
+                                let mut config = load_config();
+                                if !config.approved_uuids.contains(&uuid) {
+                                    config.approved_uuids.push(uuid.clone());
+                                    if let Err(e) = crate::storage::save_config(&config) {
+                                        error!("Erreur sauvegarde config : {}", e);
+                                    }
+                                }
+
+                                let rt = tokio::runtime::Builder::new_current_thread()
+                                    .enable_all()
+                                    .build()
+                                    .unwrap();
+                                rt.block_on(async {
+                                    if let Err(e) =
+                                        crate::handler::run_wizard(vid, pid, &product_clone, &uuid)
+                                            .await
+                                    {
+                                        error!("Erreur Wizard : {}", e);
+                                    }
+                                });
+                            }
                         });
                     }
                 } else {
-                    // Nouveau périphérique ou non configuré
-                    // On lance le wizard dans un thread bloquant séparé pour ne pas bloquer l'executor asynchrone
-                    // et on utilise loop {} pour attendre l'entrée si nécessaire, mais ici dialoguer est bloquant.
-                    tokio::task::spawn_blocking(move || {
-                        if dialoguer::Confirm::new()
-                            .with_prompt(format!(
-                                "Nouveau périphérique ({}) détecté. Voulez-vous le configurer ?",
-                                product
-                            ))
-                            .default(false)
-                            .interact()
-                            .unwrap_or(false)
-                        {
-                            // On a besoin d'un runtime pour appeler le wizard async depuis le thread bloquant
-                            let rt = tokio::runtime::Builder::new_current_thread()
-                                .enable_all()
-                                .build()
-                                .unwrap();
-                            rt.block_on(async {
-                                if let Err(e) =
-                                    crate::handler::run_wizard(vid, pid, &product, &mut config)
-                                        .await
-                                {
-                                    error!("Erreur Wizard : {}", e);
-                                }
-                            });
-                        }
-                    });
+                    warn!("Impossible d'extraire l'UUID pour l'appareil {}.", product);
                 }
             }
             HotplugEvent::Disconnected(_) => {

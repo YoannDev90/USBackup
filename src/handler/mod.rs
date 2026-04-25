@@ -4,4 +4,4 @@ pub mod github;
 pub mod udev_utils;
 
 pub use wizard::run_wizard;
-pub use backup::trigger_backup;
+pub use backup::{trigger_backup, trigger_backup_by_uuid};

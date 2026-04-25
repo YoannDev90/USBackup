@@ -1,8 +1,6 @@
-use crate::models::device::DeviceConfig;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct AppConfig {
-    pub devices: HashMap<String, DeviceConfig>,
+    pub approved_uuids: Vec<String>,
 }

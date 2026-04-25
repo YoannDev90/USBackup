@@ -12,11 +12,10 @@ pub async fn run_wizard(
     vid: u16,
     pid: u16,
     product: &str,
-    config: &mut AppConfig,
+    uuid: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("\n🚀 Configuration assistant for: {}", product);
 
-    let device_key = format!("{:04x}:{:04x}", vid, pid);
     let name: String = Input::new()
         .with_prompt("Friendly name for this device")
         .default(product.into())
@@ -26,19 +25,18 @@ pub async fn run_wizard(
     info!("Searching for a mount point for the device (timeout 30s)...");
     let mut disks = Disks::new();
     let mut mount_info = Vec::new();
+    let mut chosen_usb_root = None;
 
     for i in 0..15 {
         // Attempt active mount
         let usb_parts = find_usb_partitions();
-        debug!(
-            "[Attempt {}] USB partitions detected by udev: {:?}",
-            i + 1,
-            usb_parts
-        );
-
         for part in usb_parts {
-            if mount_partition(&part).await {
-                info!("Mount successful for {}", part);
+            if let Some(u) = crate::handler::udev_utils::get_partition_uuid(&part) {
+                if u == uuid {
+                    if mount_partition(&part).await {
+                        info!("Mount successful for {}", part);
+                    }
+                }
             }
         }
 
@@ -48,12 +46,23 @@ pub async fn run_wizard(
             .iter()
             .filter(|d| {
                 let mount = d.mount_point().to_string_lossy();
-                debug!(
-                    "Examining disk: {} | Mount: {}",
-                    d.name().to_string_lossy(),
-                    mount
-                );
-                !mount.starts_with("/boot") && mount != "/" && mount != "/home" && !mount.is_empty()
+                // On cherche spécifiquement la clé avec notre UUID
+                let usb_parts = find_usb_partitions();
+                let mut matches_uuid = false;
+                for part in usb_parts {
+                    if let Some(u) = crate::handler::udev_utils::get_partition_uuid(&part) {
+                        if u == uuid {
+                            // On ne peut pas facilement lier disk à part ici sans plus de logique,
+                            // on garde une heuristique ou on check toutes les parts
+                            matches_uuid = true;
+                        }
+                    }
+                }
+                matches_uuid
+                    && !mount.starts_with("/boot")
+                    && mount != "/"
+                    && mount != "/home"
+                    && !mount.is_empty()
             })
             .map(|d| {
                 let name = d.name().to_string_lossy();
@@ -75,9 +84,8 @@ pub async fn run_wizard(
     }
 
     if mount_info.is_empty() {
-        return Err(
-            "No external disk (USB key) detected. Please make sure it is properly mounted.".into(),
-        );
+        error!("No external disk (USB key) detected with UUID {}. Please make sure it is properly mounted.", uuid);
+        return Ok(());
     }
 
     let selection = Select::new()
@@ -89,21 +97,7 @@ pub async fn run_wizard(
     let selected_mount_info = &mount_info[selection];
     let chosen_path = selected_mount_info.split(" on ").last().unwrap();
     let usb_root = PathBuf::from(chosen_path);
-
-    // Essayer de récupérer l'UUID de la partition
-    let mut partition_uuid = None;
-    let parts = find_usb_partitions();
-    for part in parts {
-        // On vérifie si cette partition correspond au point de montage
-        // C'est un peu heuristique mais udisksctl mount nous donne le chemin
-        let disks_after = Disks::new_with_refreshed_list();
-        if disks_after.iter().any(|d| d.mount_point() == usb_root) {
-            partition_uuid = crate::handler::udev_utils::get_partition_uuid(&part);
-            if partition_uuid.is_some() {
-                break;
-            }
-        }
-    }
+    chosen_usb_root = Some(usb_root.clone());
 
     // 2. Select the destination folder ON the key
     let dest_folder: String = Input::new()
@@ -230,14 +224,18 @@ pub async fn run_wizard(
         name: name.clone(),
         vendor_id: vid,
         product_id: pid,
-        uuid: partition_uuid,
+        uuid: Some(uuid.to_string()),
         action: DeviceAction::Whitelist,
         backup_rules: rules,
     };
 
-    config.devices.insert(device_key, new_device);
-    save_config(config)?;
+    if let Some(usb_root) = chosen_usb_root {
+        crate::storage::save_device_config(&usb_root, &new_device)?;
+        println!(
+            "\n✅ Configuration registered locally on the key ({:?})!",
+            usb_root.join(".usbackup.toml")
+        );
+    }
 
-    println!("\n✅ Configuration registered for {} !", name);
     Ok(())
 }
