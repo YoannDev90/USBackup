@@ -6,17 +6,20 @@ use flate2::Compression;
 use log::{debug, error, info, warn};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use sysinfo::Disks;
 use tokio::process::Command as TokioCommand;
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
+// Laisse cette fonction publique si tu prévois de l'appeler ailleurs,
+// sinon on peut la marquer comme autorisée ou la supprimer.
+#[allow(dead_code)]
 pub async fn trigger_backup(device_config: &DeviceConfig) {
     inner_trigger_backup(device_config, None).await;
 }
 
-pub async fn trigger_backup_by_uuid(vid: u16, pid: u16, uuid: &str) -> Option<DeviceConfig> {
+pub async fn trigger_backup_by_uuid(_vid: u16, _pid: u16, uuid: &str) -> Option<DeviceConfig> {
     info!(
         "Waiting for device {} to be mounted to load local config...",
         uuid
@@ -42,7 +45,7 @@ pub async fn trigger_backup_by_uuid(vid: u16, pid: u16, uuid: &str) -> Option<De
                     }
                     // Trouver où c'est monté
                     let disks = Disks::new_with_refreshed_list();
-                    if let Some(d) = disks.iter().find(|d| {
+                    if let Some(d) = disks.iter().find(|_d| {
                         // Heuristique simplifiée pour l'instant
                         crate::handler::udev_utils::get_partition_uuid(&part).as_deref()
                             == Some(uuid)

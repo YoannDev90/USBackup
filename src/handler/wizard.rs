@@ -23,7 +23,6 @@ pub async fn run_wizard(
     info!("Searching for a mount point for the device (timeout 30s)...");
     let mut disks = Disks::new();
     let mut mount_info = Vec::new();
-    let mut chosen_usb_root = None;
 
     for i in 0..15 {
         // Attempt active mount
@@ -95,7 +94,6 @@ pub async fn run_wizard(
     let selected_mount_info = &mount_info[selection];
     let chosen_path = selected_mount_info.split(" on ").last().unwrap();
     let usb_root = PathBuf::from(chosen_path);
-    chosen_usb_root = Some(usb_root.clone());
 
     // 2. Select the destination folder ON the key
     let dest_folder: String = Input::new()
@@ -246,13 +244,11 @@ pub async fn run_wizard(
     let config_main = crate::storage::load_config();
     crate::storage::sign_config(&mut new_device, &config_main.secret_key);
 
-    if let Some(usb_root) = chosen_usb_root {
-        crate::storage::save_device_config(&usb_root, &new_device)?;
-        println!(
-            "\n✅ Configuration registered locally on the key ({:?})!",
-            usb_root.join(".usbackup.toml")
-        );
-    }
+    crate::storage::save_device_config(&usb_root, &new_device)?;
+    println!(
+        "\n✅ Configuration registered locally on the key ({:?})!",
+        usb_root.join(".usbackup.toml")
+    );
 
     Ok(())
 }
