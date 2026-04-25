@@ -19,3 +19,23 @@ udev = "0.9.3"
 env_logger = "0.11.10"
 log = "0.4.29"
 tokio = { version = "1.52.1", features = ["full"] }
+
+[package.metadata.deb]
+maintainer = "YoannDev90 <yoanndev@outlook.fr>"
+copyright = "2026, Yoann"
+license-file = ["LICENSE", "0"]
+extended-description = """
+Automated USB backup agent with TUI and auto-mount features.
+"""
+section = "utility"
+priority = "optional"
+assets = [["target/release/USBackup", "/usr/bin/usbackup", "755"]]
+
+[package.metadata.rpm]
+package = "usbackup"
+
+[package.metadata.rpm.cargo]
+buildflags = ["--release"]
+
+[package.metadata.rpm.targets]
+usbackup = { path = "/usr/bin/usbackup" }
