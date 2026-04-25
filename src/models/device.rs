@@ -25,6 +25,7 @@ pub struct DeviceConfig {
     pub name: String,
     pub vendor_id: u16,
     pub product_id: u16,
+    pub uuid: Option<String>,
     pub action: DeviceAction,
     pub backup_rules: Vec<BackupRule>,
 }

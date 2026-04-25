@@ -86,8 +86,24 @@ pub async fn run_wizard(
         .default(0)
         .interact()?;
 
-    let chosen_path = mount_info[selection].split(" on ").last().unwrap();
+    let selected_mount_info = &mount_info[selection];
+    let chosen_path = selected_mount_info.split(" on ").last().unwrap();
     let usb_root = PathBuf::from(chosen_path);
+
+    // Essayer de récupérer l'UUID de la partition
+    let mut partition_uuid = None;
+    let parts = find_usb_partitions();
+    for part in parts {
+        // On vérifie si cette partition correspond au point de montage
+        // C'est un peu heuristique mais udisksctl mount nous donne le chemin
+        let disks_after = Disks::new_with_refreshed_list();
+        if disks_after.iter().any(|d| d.mount_point() == usb_root) {
+            partition_uuid = crate::handler::udev_utils::get_partition_uuid(&part);
+            if partition_uuid.is_some() {
+                break;
+            }
+        }
+    }
 
     // 2. Select the destination folder ON the key
     let dest_folder: String = Input::new()
@@ -214,6 +230,7 @@ pub async fn run_wizard(
         name: name.clone(),
         vendor_id: vid,
         product_id: pid,
+        uuid: partition_uuid,
         action: DeviceAction::Whitelist,
         backup_rules: rules,
     };

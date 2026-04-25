@@ -39,6 +39,23 @@ pub fn find_usb_partitions() -> Vec<String> {
     partitions
 }
 
+pub fn get_partition_uuid(devnode: &str) -> Option<String> {
+    let mut enumerator = udev::Enumerator::new().ok()?;
+    enumerator.match_subsystem("block").ok()?;
+
+    let devices = enumerator.scan_devices().ok()?;
+    for device in devices {
+        if let Some(node) = device.devnode() {
+            if node.to_string_lossy() == devnode {
+                return device
+                    .property_value("ID_FS_UUID")
+                    .map(|v| v.to_string_lossy().to_string());
+            }
+        }
+    }
+    None
+}
+
 pub async fn mount_partition(part: &str) -> bool {
     let status = TokioCommand::new("udisksctl")
         .arg("mount")
