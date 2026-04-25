@@ -27,4 +27,4 @@ rustc-ice-*.txt
 #.idea/
 
 
-backup_config.json
+backup_config.toml

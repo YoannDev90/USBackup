@@ -45,8 +45,23 @@ pub async fn trigger_backup_by_uuid(_vid: u16, _pid: u16, uuid: &str) -> Option<
                     }
                     // Trouver où c'est monté
                     let disks = Disks::new_with_refreshed_list();
-                    if let Some(d) = disks.iter().find(|_d| {
-                        // Heuristique simplifiée pour l'instant
+                    if let Some(d) = disks.iter().find(|d| {
+                        let mount = d.mount_point().to_string_lossy();
+                        // Filtrage strict : ignorer les partitions système et home
+                        if mount == "/"
+                            || mount.starts_with("/boot")
+                            || mount.starts_with("/home")
+                            || mount.starts_with("/run/user")
+                        {
+                            return false;
+                        }
+
+                        // Si c'est monté dans /run/media ou /media, c'est probablement notre clé
+                        if mount.starts_with("/run/media/") || mount.starts_with("/media/") {
+                            return true;
+                        }
+
+                        // Sinon, on vérifie l'UUID
                         crate::handler::udev_utils::get_partition_uuid(&part).as_deref()
                             == Some(uuid)
                     }) {

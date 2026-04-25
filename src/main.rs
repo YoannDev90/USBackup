@@ -6,7 +6,7 @@ mod notifications;
 mod storage;
 
 use crate::storage::load_config;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use std::process::Command;
 
 fn check_dependencies() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -54,12 +54,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 // Recharger la config des UUID approuvés
                 let config = load_config();
 
-                // Chercher l'UUID de cet appareil
+                // Chercher l'UUID de cet appareil avec plusieurs tentatives
                 let mut device_uuid = None;
-                let parts = crate::handler::udev_utils::find_usb_partitions();
-                for part in parts {
-                    if let Some(u) = crate::handler::udev_utils::get_partition_uuid(&part) {
-                        device_uuid = Some(u);
+                for i in 0..5 {
+                    if i > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
+                    let parts = crate::handler::udev_utils::find_usb_partitions();
+                    debug!("Parts found: {:?}", parts);
+                    for part in parts {
+                        if let Some(u) = crate::handler::udev_utils::get_partition_uuid(&part) {
+                            device_uuid = Some(u);
+                            break;
+                        }
+                    }
+                    if device_uuid.is_some() {
                         break;
                     }
                 }
