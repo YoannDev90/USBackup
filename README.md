@@ -7,14 +7,30 @@ Automated USB backup agent written in Rust. This program runs 24/7 and instantly
 ## ✨ Features
 
 - **Real-time Monitoring**: Detects connect/disconnect events without polling (using native APIs via `nusb`).
-- **Modern TUI**: Beautiful Terminal User Interface built with `ratatui` for real-time activity tracking.
+- **Decentralized Configuration**: Configuration is stored directly on the USB devices (`.usbackup.toml`), making it portable.
+- **HMAC Security**: Configurations are cryptographically signed using a local secret key to prevent unauthorized execution.
+- **Multiple Backup Formats**: Choose between standard synchronization (`rsync`), ZIP archives, or TarGz archives.
 - **Smart Auto-mount**: Automatically finds and mounts USB partitions using `udev` and `udisksctl`.
 - **Interactive Whitelisting**: When a new device is detected, the app asks whether to remember it, ignore it, or ask again later.
-- **Background Agent**: Multi-threaded architecture to keep the UI responsive during backups.
-- **Flexible Configuration**: Manage specific backup rules (sources, destinations, exclusions) for each device.
+- **Background Agent**: Multi-threaded architecture to keep the task responsive during backups.
 - **System Notifications**: Uses native desktop notifications to keep you informed.
 
-## 💻 Supported OS
+## �️ How it Works (Technical)
+
+USBackup uses a **Decentralized Configuration** model with a **Zero-Trust** security approach:
+
+1. **Detection**: Listens to `udev` events via `nusb` for instant device detection (no polling).
+2. **Identification**: Uses the partition **UUID** to distinguish between different USB devices.
+3. **HMAC Signature**: 
+   - A unique `secret_key` is generated on your machine.
+   - Each device config (`.usbackup.toml`) is signed with this secret using **HMAC-SHA256**.
+   - This prevents malicious users from injecting their own configuration to steal files.
+4. **Execution**:
+   - **Mirror Mode**: Incremental synchronization using `rsync`'s delta algorithm.
+   - **Archive Mode**: Creates timestamped `.zip` or `.tar.gz` files for versioning.
+   - **Smart Exclusions**: Automatically respects your project's `.gitignore` rules.
+
+## �💻 Supported OS
 
 | OS          | Status          | Notes                                              |
 | :---------- | :-------------- | :------------------------------------------------- |
@@ -39,26 +55,26 @@ You need `libudev` development files installed on your system:
 
 ## ⚙️ Configuration
 
-The `backup_config.json` file manages your known devices. Typical structure:
+USBackup uses a decentralized configuration model. 
 
-```json
-{
-  "devices": {
-    "0781:5581": {
-      "name": "My SanDisk Key",
-      "vendor_id": 1921,
-      "product_id": 21889,
-      "action": "Whitelist",
-      "backup_rules": [
-        {
-          "source_path": "/path/to/usb/data",
-          "destination_path": "/home/user/backups/sandisk/",
-          "exclude": [".tmp", "cache/"]
-        }
-      ]
-    }
-  }
-}
+1. **`backup_config.toml`** (Local): Stored in the application directory, it contains the list of approved UUIDs and your machine-specific **secret key** for signing.
+2. **`.usbackup.toml`** (Device): Stored on the root of your USB key. It contains the backup rules and the HMAC signature.
+
+### Example `.usbackup.toml`:
+
+```toml
+name = "My SanDisk Key"
+vendor_id = 1921
+product_id = 21889
+uuid = "1234-ABCD"
+signature = "a1b2c3d4..."
+action = "Whitelist"
+
+[[backup_rules]]
+source_path = "/home/user/Documents"
+destination_path = "backups/docs"
+exclude = [".tmp", "cache/"]
+compression = "Zip" # Options: None, Zip, TarGz
 ```
 
 ### Available Actions:
@@ -68,10 +84,12 @@ The `backup_config.json` file manages your known devices. Typical structure:
 
 ## 🚀 Roadmap
 
-- [x] Implement automatic partition mounting (udev/udisksctl).
-- [x] Modern TUI with real-time logs.
-- [ ] Add synchronization logic via `rsync` or native Rust copy.
-- [x] System notifications upon backup completion.
+- [x] Decentralized TOML configuration.
+- [x] HMAC Signature for configuration security.
+- [x] Compression support (ZIP, TarGz).
+- [x] Automatic partition mounting.
+- [ ] Modern TUI with `ratatui`.
+- [x] System notifications.
 
 ## ⚖️ License
 
