@@ -6,7 +6,7 @@ mod models;
 mod notifications;
 mod storage;
 
-use crate::handler::{ask_user_action, handle_error, trigger_backup};
+use crate::handler::{ask_user_action, trigger_backup};
 use crate::models::device::{BackupRule, DeviceAction, DeviceConfig};
 use crate::storage::{load_config, save_config};
 

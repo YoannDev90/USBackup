@@ -2,7 +2,7 @@ use crate::models::device::DeviceAction;
 use crate::notifications;
 use colored::Colorize;
 use std::io::{self, Write};
-use std::process::Command;
+use sysinfo::Disks;
 
 pub fn trigger_backup(device_config: &crate::models::device::DeviceConfig) {
     println!(
@@ -11,22 +11,44 @@ pub fn trigger_backup(device_config: &crate::models::device::DeviceConfig) {
         device_config.name
     );
 
-    // Tentative de montage automatique via udisksctl
-    // On essaie de monter les partitions potentielles (souvent sdb1, sdc1...)
-    // qui correspondent à ce disque. Pour faire ça bien en Rust pur, il faudrait
-    // mapper le VID/PID au block device via libudev.
-    // En attendant, on utilise une approche "best effort" via shell.
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(format!(
-            "for dev in /dev/sd[b-z][0-9]; do udisksctl mount -b $dev 2>/dev/null && break; done"
-        ))
-        .status();
+    // Détection des disques via sysinfo (Cross-platform)
+    let disks = Disks::new_with_refreshed_list();
 
-    if let Ok(s) = status {
-        if s.success() {
-            println!("{} Disque monté avec succès.", " OK ".on_green());
+    let mut found_mount_point = None;
+
+    for disk in &disks {
+        let name = disk.name().to_string_lossy();
+        let mount_point = disk.mount_point().to_string_lossy();
+        let file_system = disk.file_system().to_string_lossy();
+
+        println!(
+            "{} Disque trouvé: {} | Mount: {} | FS: {}",
+            " DEBUG ".on_bright_black(),
+            name.cyan(),
+            mount_point.yellow(),
+            file_system.magenta()
+        );
+
+        // On cherche une correspondance
+        if mount_point
+            .to_lowercase()
+            .contains(&device_config.name.to_lowercase())
+            || name
+                .to_lowercase()
+                .contains(&device_config.name.to_lowercase())
+        {
+            found_mount_point = Some(disk.mount_point().to_path_buf());
+            break;
         }
+    }
+
+    if let Some(path) = found_mount_point {
+        println!("{} Disque détecté sur : {:?}", " OK ".on_green(), path);
+    } else {
+        println!(
+            "{} Impossible de localiser le point de montage.",
+            " WARN ".on_yellow()
+        );
     }
 
     notifications::notify_backup_start(&device_config.name);
