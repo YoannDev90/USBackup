@@ -61,28 +61,18 @@ pub fn trigger_backup(device_config: &crate::models::device::DeviceConfig) {
         // TENTER LE MONTAGE À CHAQUE ESSAI si non monté
         let usb_parts = find_usb_partitions();
         for part in usb_parts {
-            #[cfg(feature = "linux-hotplug")]
-            {
-                // On tente de monter toutes les partitions USB trouvées via udisksctl
-                let status = Command::new("udisksctl")
-                    .arg("mount")
-                    .arg("-b")
-                    .arg(&part)
-                    .output();
+            // On tente de monter toutes les partitions USB trouvées via udisksctl (Linux)
+            let status = Command::new("udisksctl")
+                .arg("mount")
+                .arg("-b")
+                .arg(&part)
+                .output();
 
-                if let Ok(out) = status {
-                    if out.status.success() {
-                        let msg = String::from_utf8_lossy(&out.stdout);
-                        info!("Montage réussi : {}", msg.trim());
-                    }
+            if let Ok(out) = status {
+                if out.status.success() {
+                    let msg = String::from_utf8_lossy(&out.stdout);
+                    info!("Montage réussi : {}", msg.trim());
                 }
-            }
-
-            #[cfg(feature = "windows-hotplug")]
-            {
-                // Sur Windows, si find_usb_partitions a trouvé quelque chose,
-                // c'est que c'est déjà "monté" (a une lettre de lecteur)
-                debug!("Lecteur amovible détecté sur Windows : {}", part);
             }
         }
 
