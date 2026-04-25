@@ -279,6 +279,10 @@ async fn inner_trigger_backup(
                                 .unwrap_or_else(|| "Unknown".to_string());
                             let stderr = String::from_utf8_lossy(&out.stderr);
                             error!("Rsync failed with code {} for {}", code, rule.source_path);
+                            notifications::notify_backup_error(
+                                &device_config.name,
+                                &format!("Erreur rsync (code {}). Consultez les logs.", code),
+                            );
                             append_to_log(
                                 &device_config.name,
                                 &rule.source_path,
@@ -288,6 +292,10 @@ async fn inner_trigger_backup(
                         }
                         Err(e) => {
                             error!("Error during rsync execution: {}", e);
+                            notifications::notify_backup_error(
+                                &device_config.name,
+                                &format!("Erreur d'exécution rsync : {}", e),
+                            );
                             append_to_log(
                                 &device_config.name,
                                 &rule.source_path,

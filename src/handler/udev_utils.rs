@@ -57,15 +57,32 @@ pub fn get_partition_uuid(devnode: &str) -> Option<String> {
 }
 
 pub async fn mount_partition(part: &str) -> bool {
-    let status = TokioCommand::new("udisksctl")
+    let output = TokioCommand::new("udisksctl")
         .arg("mount")
         .arg("-b")
         .arg(part)
         .output()
         .await;
 
-    match status {
-        Ok(out) if out.status.success() => true,
-        _ => false,
+    match output {
+        Ok(out) if out.status.success() => {
+            debug!("Successfully mounted partition {}", part);
+            true
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            // On ne log en error que si ce n'est pas "already mounted" car c'est un cas fréquent et normal
+            if stderr.contains("already mounted") {
+                debug!("Partition {} is already mounted.", part);
+                true
+            } else {
+                debug!("udisksctl mount failed for {}: {}", part, stderr);
+                false
+            }
+        }
+        Err(e) => {
+            debug!("Failed to execute udisksctl: {}", e);
+            false
+        }
     }
 }
