@@ -11,19 +11,17 @@ use crate::models::device::DeviceAction;
 use crate::storage::load_config;
 use crate::tui::{TuiEvent, run_tui};
 use std::sync::mpsc;
-use std::thread;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialise le logger (se configure via RUST_LOG)
+    // Initialise le logger
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
     let (tx, rx) = mpsc::channel();
     let tx_hotplug = tx.clone();
 
     // Fil de surveillance hotplug (arrière-plan)
-    thread::spawn(move || {
-        let config = load_config();
+    tokio::spawn(async move {
         let watch = match nusb::watch_devices() {
             Ok(w) => w,
             Err(e) => {
@@ -32,7 +30,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-        for event in futures_lite::stream::block_on(watch) {
+        use futures_lite::StreamExt;
+        let mut stream = watch;
+
+        while let Some(event) = stream.next().await {
             match event {
                 HotplugEvent::Connected(device) => {
                     let vid = device.vendor_id();
@@ -42,13 +43,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let _ = tx_hotplug.send(TuiEvent::DeviceConnected(product.clone()));
 
+                    // Recharger la config à chaque déconnexion/connexion pour être à jour
+                    let config = load_config();
+
                     if let Some(dev_conf) = config.devices.get(&device_key).cloned() {
                         if dev_conf.action == DeviceAction::Whitelist {
                             let tx_backup = tx_hotplug.clone();
-                            thread::spawn(move || {
+                            tokio::spawn(async move {
                                 let _ =
                                     tx_backup.send(TuiEvent::BackupStarted(dev_conf.name.clone()));
-                                trigger_backup(&dev_conf);
+                                trigger_backup(&dev_conf).await;
                                 let _ =
                                     tx_backup.send(TuiEvent::BackupSuccess(dev_conf.name.clone()));
                             });

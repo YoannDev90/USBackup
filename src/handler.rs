@@ -1,10 +1,8 @@
-use crate::models::device::DeviceAction;
 use crate::notifications;
-use colored::Colorize;
-use log::{debug, info, warn};
-use std::io::{self, Write};
-use std::process::Command;
+use log::{debug, error, info, warn};
+use std::path::Path;
 use sysinfo::Disks;
+use tokio::process::Command as TokioCommand;
 
 fn find_usb_partitions() -> Vec<String> {
     let mut partitions = Vec::new();
@@ -44,29 +42,30 @@ fn find_usb_partitions() -> Vec<String> {
     partitions
 }
 
-pub fn trigger_backup(device_config: &crate::models::device::DeviceConfig) {
+pub async fn trigger_backup(device_config: &crate::models::device::DeviceConfig) {
     info!("Préparation du backup pour {}", device_config.name);
 
     // Détection des disques via sysinfo (Cross-platform) avec retries
     let mut found_mount_point = None;
     let mut attempts = 0;
 
-    debug!("Surveillance du montage (8 tentatives)...");
+    debug!("Surveillance du montage (30 tentatives)...");
 
-    while attempts < 8 && found_mount_point.is_none() {
+    while attempts < 30 && found_mount_point.is_none() {
         if attempts > 0 {
-            std::thread::sleep(std::time::Duration::from_millis(1000));
+            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
         }
 
         // TENTER LE MONTAGE À CHAQUE ESSAI si non monté
         let usb_parts = find_usb_partitions();
         for part in usb_parts {
             // On tente de monter toutes les partitions USB trouvées via udisksctl (Linux)
-            let status = Command::new("udisksctl")
+            let status = TokioCommand::new("udisksctl")
                 .arg("mount")
                 .arg("-b")
                 .arg(&part)
-                .output();
+                .output()
+                .await;
 
             if let Ok(out) = status {
                 if out.status.success() {
@@ -79,11 +78,12 @@ pub fn trigger_backup(device_config: &crate::models::device::DeviceConfig) {
         let disks = Disks::new_with_refreshed_list();
 
         // Debug additionnel : affiche la sortie de lsblk pendant l'essai
-        if attempts % 3 == 0 {
-            let lsblk_out = Command::new("lsblk")
+        if attempts % 5 == 0 {
+            let lsblk_out = TokioCommand::new("lsblk")
                 .arg("-o")
                 .arg("NAME,TRAN,MOUNTPOINT")
-                .output();
+                .output()
+                .await;
             if let Ok(out) = lsblk_out {
                 debug!("LSBLK Snapshot:\n{}", String::from_utf8_lossy(&out.stdout));
             }
@@ -125,60 +125,52 @@ pub fn trigger_backup(device_config: &crate::models::device::DeviceConfig) {
         info!("Disque détecté sur : {:?}", path);
     } else {
         warn!("Impossible de localiser le point de montage.");
+        return;
     }
 
     notifications::notify_backup_start(&device_config.name);
 
-    println!(
-        "{} Lancement des sauvegardes pour : {}",
-        " -> ".blue(),
-        device_config.name.green()
-    );
     for rule in &device_config.backup_rules {
-        println!(
-            "   {} Synchronisation {} vers {}",
-            " • ".cyan(),
-            rule.source_path.yellow(),
-            rule.destination_path.yellow()
+        info!(
+            "Synchronisation {} vers {}",
+            rule.source_path, rule.destination_path
         );
-        // Ici : Logique de copie
+
+        // Vérifier si la source existe
+        if !Path::new(&rule.source_path).exists() {
+            error!("Source inexistante : {}", rule.source_path);
+            continue;
+        }
+
+        // Créer le répertoire de destination s'il n'existe pas
+        if let Err(e) = std::fs::create_dir_all(&rule.destination_path) {
+            error!(
+                "Impossible de créer la destination {} : {}",
+                rule.destination_path, e
+            );
+            continue;
+        }
+
+        // Utilisation de rsync pour une synchronisation efficace
+        let status = TokioCommand::new("rsync")
+            .arg("-avz")
+            .arg("--delete")
+            .arg(&rule.source_path)
+            .arg(&rule.destination_path)
+            .status()
+            .await;
+
+        match status {
+            Ok(s) if s.success() => info!("Succès pour {}", rule.source_path),
+            Ok(s) => error!(
+                "Rsync a échoué avec le code {} pour {}",
+                s, rule.source_path
+            ),
+            Err(e) => error!("Erreur lors de l'exécution de rsync : {}", e),
+        }
     }
 
     notifications::notify_backup_success(&device_config.name);
 }
 
-#[allow(dead_code)]
-pub fn handle_error(device_name: &str, error: &str) {
-    eprintln!(
-        "{} Erreur sur {} : {}",
-        " ERR ".on_red(),
-        device_name,
-        error
-    );
-    notifications::notify_backup_error(device_name, error);
-}
-
-#[allow(dead_code)]
-pub fn ask_user_action(vid: u16, pid: u16, product: &str) -> DeviceAction {
-    println!(
-        "\n{}",
-        "=== Nouveau péripherique détecté ===".bright_magenta()
-    );
-    println!("Produit : {}", product.bright_white());
-    println!("ID : {:04x}:{:04x}", vid, pid);
-    println!("Que voulez-vous faire ?");
-    println!("1. Whitelister (Ajouter à la config)");
-    println!("2. Ignorer pour toujours");
-    println!("3. Me redemander la prochaine fois");
-
-    print!("Votre choix (1-3) : ");
-    io::stdout().flush().unwrap();
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).unwrap();
-    match input.trim() {
-        "1" => DeviceAction::Whitelist,
-        "2" => DeviceAction::IgnoreForever,
-        _ => DeviceAction::AskEachTime,
-    }
-}
+// Code pour ask_user_action supprimé car incompatible avec le mode TUI actuel.
