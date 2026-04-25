@@ -6,6 +6,7 @@ use std::io::{self, Write};
 use std::process::Command;
 use sysinfo::Disks;
 
+#[cfg(feature = "linux-hotplug")]
 fn find_usb_partitions() -> Vec<String> {
     let mut partitions = Vec::new();
     let mut enumerator = match udev::Enumerator::new() {
@@ -44,6 +45,44 @@ fn find_usb_partitions() -> Vec<String> {
     partitions
 }
 
+#[cfg(feature = "windows-hotplug")]
+fn find_usb_partitions() -> Vec<String> {
+    use windows::Win32::Storage::FileSystem::{
+        DRIVE_REMOVABLE, GetDriveTypeW, GetLogicalDriveStringsW,
+    };
+
+    let mut partitions = Vec::new();
+    let mut buffer = [0u16; 256];
+
+    unsafe {
+        let len = GetLogicalDriveStringsW(Some(&mut buffer));
+        if len == 0 {
+            return partitions;
+        }
+
+        let drives_str = String::from_utf16_lossy(&buffer[..len as usize]);
+        for volume in drives_str.split('\0') {
+            if volume.is_empty() {
+                continue;
+            }
+
+            let mut volume_wide: Vec<u16> = volume.encode_utf16().collect();
+            volume_wide.push(0);
+
+            if GetDriveTypeW(windows::core::PCWSTR(volume_wide.as_ptr())) == DRIVE_REMOVABLE {
+                // Sur Windows, on renvoie la lettre de lecteur (ex: "E:\")
+                partitions.push(volume.to_string());
+            }
+        }
+    }
+    partitions
+}
+
+#[cfg(not(any(feature = "linux-hotplug", feature = "windows-hotplug")))]
+fn find_usb_partitions() -> Vec<String> {
+    Vec::new()
+}
+
 pub fn trigger_backup(device_config: &crate::models::device::DeviceConfig) {
     info!("Préparation du backup pour {}", device_config.name);
 
@@ -61,18 +100,28 @@ pub fn trigger_backup(device_config: &crate::models::device::DeviceConfig) {
         // TENTER LE MONTAGE À CHAQUE ESSAI si non monté
         let usb_parts = find_usb_partitions();
         for part in usb_parts {
-            // On tente de monter toutes les partitions USB trouvées
-            let status = Command::new("udisksctl")
-                .arg("mount")
-                .arg("-b")
-                .arg(&part)
-                .output();
+            #[cfg(feature = "linux-hotplug")]
+            {
+                // On tente de monter toutes les partitions USB trouvées via udisksctl
+                let status = Command::new("udisksctl")
+                    .arg("mount")
+                    .arg("-b")
+                    .arg(&part)
+                    .output();
 
-            if let Ok(out) = status {
-                if out.status.success() {
-                    let msg = String::from_utf8_lossy(&out.stdout);
-                    info!("Montage réussi : {}", msg.trim());
+                if let Ok(out) = status {
+                    if out.status.success() {
+                        let msg = String::from_utf8_lossy(&out.stdout);
+                        info!("Montage réussi : {}", msg.trim());
+                    }
                 }
+            }
+
+            #[cfg(feature = "windows-hotplug")]
+            {
+                // Sur Windows, si find_usb_partitions a trouvé quelque chose,
+                // c'est que c'est déjà "monté" (a une lettre de lecteur)
+                debug!("Lecteur amovible détecté sur Windows : {}", part);
             }
         }
 

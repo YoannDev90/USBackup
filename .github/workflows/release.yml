@@ -40,40 +40,47 @@ jobs:
                   sudo apt-get install -y libudev-dev pkg-config
 
             - name: Build
-              run: cargo build --release --target ${{ matrix.target }}
+              run: |
+                  if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+                    cargo build --release --target ${{ matrix.target }}
+                  else
+                    cargo build --release --target ${{ matrix.target }} --no-default-features --features windows-hotplug
+                  fi
+              shell: bash
 
             - name: Generate .deb package
               if: matrix.os == 'ubuntu-latest'
               run: |
                   cargo install cargo-deb
                   cargo deb --target ${{ matrix.target }} --no-build
-                  mv target/${{ matrix.target }}/debian/*.deb target/${{ matrix.target }}/release/usbackup.deb
+                  mkdir -p target/${{ matrix.target }}/dist
+                  mv target/${{ matrix.target }}/debian/*.deb target/${{ matrix.target }}/dist/usbackup.deb
 
             - name: Generate .rpm package
               if: matrix.os == 'ubuntu-latest'
               run: |
                   cargo install cargo-generate-rpm
                   cargo generate-rpm --target ${{ matrix.target }}
-                  mv target/${{ matrix.target }}/generate-rpm/*.rpm target/${{ matrix.target }}/release/usbackup.rpm
+                  mkdir -p target/${{ matrix.target }}/dist
+                  mv target/${{ matrix.target }}/generate-rpm/*.rpm target/${{ matrix.target }}/dist/usbackup.rpm
 
-            - name: Rename binary (Linux)
+            - name: Prepare binary (Linux)
               if: matrix.os == 'ubuntu-latest'
-              run: mv target/${{ matrix.target }}/release/USBackup target/${{ matrix.target
-                  }}/release/${{ matrix.artifact_name }}
+              run: |
+                  mkdir -p target/${{ matrix.target }}/dist
+                  cp target/${{ matrix.target }}/release/USBackup target/${{ matrix.target }}/dist/${{ matrix.artifact_name }}
 
-            - name: Rename binary (Windows)
+            - name: Prepare binary (Windows)
               if: matrix.os == 'windows-latest'
-              run: mv target/${{ matrix.target }}/release/USBackup.exe target/${{
-                  matrix.target }}/release/${{ matrix.artifact_name }}
+              run: |
+                  mkdir -p target/${{ matrix.target }}/dist
+                  cp target/${{ matrix.target }}/release/USBackup.exe target/${{ matrix.target }}/dist/${{ matrix.artifact_name }}
 
             - name: Upload artifacts
               uses: actions/upload-artifact@v4
               with:
                   name: ${{ matrix.artifact_name }}
-                  path: |
-                      target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
-                      target/${{ matrix.target }}/release/*.deb
-                      target/${{ matrix.target }}/release/*.rpm
+                  path: target/${{ matrix.target }}/dist/*
 
     github-release:
         name: Create GitHub Release
