@@ -7,12 +7,20 @@ Un agent de sauvegarde automatique pour périphériques USB écrit en Rust. Ce p
 ## ✨ Fonctionnalités
 
 - **Surveillance en temps réel** : Détecte les événements de branchement/débranchement sans polling (utilisation des APIs natives via `nusb`).
+- **Interface TUI Moderne** : Une interface élégante dans le terminal utilisant `ratatui` pour suivre l'activité en direct.
+- **Auto-montage Intelligent** : Trouve et monte automatiquement les partitions USB via `udev` et `udisksctl`.
 - **Whitelisting interactif** : Lorsqu'un nouvel appareil est détecté, l'application vous demande s'il faut le mémoriser, l'ignorer ou poser la question plus tard.
-- **Configuration flexible** : Gérez des règles de sauvegarde spécifiques (sources, destinations, exclusions) pour chaque périphérique.
-- **Logs colorés** : Suivi clair de l'activité directement dans le terminal.
+- **Architecture Multi-thread** : L'interface reste fluide même pendant les sauvegardes lourdes en arrière-plan.
+- **Notifications Système** : Utilise les notifications natives du bureau pour vous tenir informé.
 
 ## 🛠️ Installation
 
+### Dépendances (Linux)
+Vous devez avoir les fichiers de développement `libudev` installés :
+- **Fedora/RHEL** : `sudo dnf install libudev-devel`
+- **Ubuntu/Debian** : `sudo apt install libudev-dev pkg-config`
+
+### Compilation
 1. Assurez-vous d'avoir [Rust](https://www.rust-lang.org/) installé.
 2. Clonez le dépôt.
 3. Compilez et lancez :
@@ -51,9 +59,10 @@ Le fichier `backup_config.json` gère vos périphériques connus. Voici la struc
 
 ## 🚀 Prochaines étapes
 
-- [ ] Implémenter le montage automatique des partitions (Linux/Udisksctl).
-- [ ] Ajouter la synchronisation via `rsync`.
-- [ ] Notification système lors de la fin d'un backup.
+- [x] Implémenter le montage automatique des partitions (udev/udisksctl).
+- [x] Interface TUI avec logs temps réel.
+- [ ] Ajouter la synchronisation via `rsync` ou logique Rust native.
+- [x] Notification système lors de la fin d'un backup.
 
 ## ⚖️ Licence
 
