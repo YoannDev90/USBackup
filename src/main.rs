@@ -1,104 +1,67 @@
-use colored::Colorize;
 use nusb::hotplug::HotplugEvent;
 
 mod handler;
 mod models;
 mod notifications;
 mod storage;
+mod tui;
 
-use crate::handler::{ask_user_action, trigger_backup};
-use crate::models::device::{BackupRule, DeviceAction, DeviceConfig};
-use crate::storage::{load_config, save_config};
+use crate::handler::trigger_backup;
+use crate::models::device::DeviceAction;
+use crate::storage::load_config;
+use crate::tui::{TuiEvent, run_tui};
+use std::sync::mpsc;
+use std::thread;
 
-fn main() {
-    println!("{}", "=== USBackup : Agent 24h/24 ===".bright_yellow());
-    let mut config = load_config();
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialise le logger (se configure via RUST_LOG)
+    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
-    let watch = match nusb::watch_devices() {
-        Ok(w) => w,
-        Err(e) => {
-            eprintln!("{} Erreur d'initialisation : {}", " ERR ".on_red(), e);
-            return;
-        }
-    };
+    let (tx, rx) = mpsc::channel();
+    let tx_hotplug = tx.clone();
 
-    println!("{}", "Surveillance active...".cyan());
+    // Fil de surveillance hotplug (arrière-plan)
+    thread::spawn(move || {
+        let mut config = load_config();
+        let watch = match nusb::watch_devices() {
+            Ok(w) => w,
+            Err(e) => {
+                let _ = tx_hotplug.send(TuiEvent::Log(format!("Erreur Initialisation : {}", e)));
+                return;
+            }
+        };
 
-    for event in futures_lite::stream::block_on(watch) {
-        let now = chrono::Local::now().format("%H:%M:%S");
-        match event {
-            HotplugEvent::Connected(device) => {
-                let vid = device.vendor_id();
-                let pid = device.product_id();
-                let product = device.product_string().unwrap_or("Inconnu");
-                let device_key = format!("{:04x}:{:04x}", vid, pid);
+        for event in futures_lite::stream::block_on(watch) {
+            match event {
+                HotplugEvent::Connected(device) => {
+                    let vid = device.vendor_id();
+                    let pid = device.product_id();
+                    let product = device.product_string().unwrap_or("Inconnu").to_string();
+                    let device_key = format!("{:04x}:{:04x}", vid, pid);
 
-                println!("[{}] {} {} ({})", now, "(+)".green(), product, device_key);
+                    let _ = tx_hotplug.send(TuiEvent::DeviceConnected(product.clone()));
 
-                let action_to_take = config
-                    .devices
-                    .get(&device_key)
-                    .map(|d| d.action.clone())
-                    .unwrap_or(DeviceAction::AskEachTime);
-
-                match action_to_take {
-                    DeviceAction::Whitelist => {
-                        if let Some(dev_conf) = config.devices.get(&device_key) {
-                            trigger_backup(dev_conf);
+                    if let Some(dev_conf) = config.devices.get(&device_key).cloned() {
+                        if dev_conf.action == DeviceAction::Whitelist {
+                            let tx_backup = tx_hotplug.clone();
+                            thread::spawn(move || {
+                                let _ =
+                                    tx_backup.send(TuiEvent::BackupStarted(dev_conf.name.clone()));
+                                trigger_backup(&dev_conf);
+                                let _ =
+                                    tx_backup.send(TuiEvent::BackupSuccess(dev_conf.name.clone()));
+                            });
                         }
-                    }
-                    DeviceAction::AskEachTime => {
-                        let action = ask_user_action(vid, pid, product);
-                        match action {
-                            DeviceAction::Whitelist => {
-                                let new_dev = DeviceConfig {
-                                    name: product.to_string(),
-                                    vendor_id: vid,
-                                    product_id: pid,
-                                    action: DeviceAction::Whitelist,
-                                    backup_rules: vec![BackupRule {
-                                        source_path: "/media/usb/data".to_string(),
-                                        destination_path: format!("./backups/{}/", product),
-                                        exclude: vec![],
-                                    }],
-                                };
-                                config.devices.insert(device_key.clone(), new_dev);
-                                save_config(&config);
-                                println!("{}", "Périphérique ajouté à la whitelist.".green());
-                                if let Some(dev_conf) = config.devices.get(&device_key) {
-                                    trigger_backup(dev_conf);
-                                }
-                            }
-                            DeviceAction::IgnoreForever => {
-                                config.devices.insert(
-                                    device_key,
-                                    DeviceConfig {
-                                        name: product.to_string(),
-                                        vendor_id: vid,
-                                        product_id: pid,
-                                        action: DeviceAction::IgnoreForever,
-                                        backup_rules: vec![],
-                                    },
-                                );
-                                save_config(&config);
-                                println!("{}", "Périphérique ignoré pour toujours.".yellow());
-                            }
-                            _ => {
-                                println!("{}", "Action reportée.".cyan());
-                            }
-                        }
-                    }
-                    DeviceAction::IgnoreForever => {
-                        println!(
-                            "{} Périphérique configuré pour être ignoré.",
-                            " SKIP ".on_black()
-                        );
                     }
                 }
-            }
-            HotplugEvent::Disconnected(device_id) => {
-                println!("[{}] {} Déconnecté (ID: {:?})", now, "(-)".red(), device_id);
+                _ => {}
             }
         }
-    }
+    });
+
+    // L'UI prend le contrôle du thread principal
+    run_tui(rx)?;
+
+    Ok(())
 }
