@@ -1,12 +1,16 @@
 use crate::handler::udev_utils::{find_usb_partitions, mount_partition};
-use crate::models::device::DeviceConfig;
+use crate::models::device::{CompressionType, DeviceConfig};
 use crate::notifications;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use log::{debug, error, info, warn};
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::path::Path;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use sysinfo::Disks;
 use tokio::process::Command as TokioCommand;
+use zip::write::SimpleFileOptions;
+use zip::ZipWriter;
 
 pub async fn trigger_backup(device_config: &DeviceConfig) {
     inner_trigger_backup(device_config, None).await;
@@ -54,9 +58,18 @@ pub async fn trigger_backup_by_uuid(vid: u16, pid: u16, uuid: &str) -> Option<De
 
     if let Some(mount_point) = found_mount_point {
         if let Some(conf) = crate::storage::load_device_config(&mount_point) {
-            info!("Local config loaded from {:?}", mount_point);
-            inner_trigger_backup(&conf, Some(mount_point)).await;
-            return Some(conf);
+            let main_config = crate::storage::load_config();
+            if crate::storage::verify_signature(&conf, &main_config.secret_key) {
+                info!("Local config loaded and verified from {:?}", mount_point);
+                inner_trigger_backup(&conf, Some(mount_point)).await;
+                return Some(conf);
+            } else {
+                error!("SECURITY ALERT: Invalid signature for local config on {:?}. The config may have been tampered with or created on another machine.", mount_point);
+                notifications::notify_backup_error(
+                    &conf.name,
+                    "Signature de configuration invalide ! Backup annulée par sécurité.",
+                );
+            }
         } else {
             error!(
                 "Appareil approuvé mais aucun fichier .usbackup.toml trouvé sur {:?}",
@@ -193,65 +206,105 @@ async fn inner_trigger_backup(
                 continue;
             }
 
-            // Use rsync for efficient synchronization
-            let mut cmd = TokioCommand::new("rsync");
-            cmd.arg("-avz").arg("--progress");
+            match rule.compression {
+                CompressionType::None => {
+                    // Use rsync for efficient synchronization
+                    let mut cmd = TokioCommand::new("rsync");
+                    cmd.arg("-avz").arg("--progress");
 
-            if rule.delete_missing {
-                cmd.arg("--delete");
-            }
+                    if rule.delete_missing {
+                        cmd.arg("--delete");
+                    }
 
-            // Add exclusions
-            for pattern in &rule.exclude {
-                cmd.arg(format!("--exclude={}", pattern));
-            }
+                    // Add exclusions
+                    for pattern in &rule.exclude {
+                        cmd.arg(format!("--exclude={}", pattern));
+                    }
 
-            // Automatic .gitignore detection
-            if let Ok(gitignore_path) = find_local_gitignore(&rule.source_path) {
-                info!(
-                    "Using local .gitignore exclusions from {:?}",
-                    gitignore_path
-                );
-                cmd.arg(format!(
-                    "--exclude-from={}",
-                    gitignore_path.to_string_lossy()
-                ));
-            }
+                    // Automatic .gitignore detection
+                    if let Ok(gitignore_path) = find_local_gitignore(&rule.source_path) {
+                        info!(
+                            "Using local .gitignore exclusions from {:?}",
+                            gitignore_path
+                        );
+                        cmd.arg(format!(
+                            "--exclude-from={}",
+                            gitignore_path.to_string_lossy()
+                        ));
+                    }
 
-            let output = cmd.arg(&rule.source_path).arg(&full_dest).output().await;
+                    let output = cmd.arg(&rule.source_path).arg(&full_dest).output().await;
 
-            match output {
-                Ok(out) if out.status.success() => {
-                    info!("Success for {}", rule.source_path);
-                    append_to_log(
-                        &device_config.name,
-                        &rule.source_path,
-                        &String::from_utf8_lossy(&out.stdout),
-                    );
+                    match output {
+                        Ok(out) if out.status.success() => {
+                            info!("Success for {}", rule.source_path);
+                            append_to_log(
+                                &device_config.name,
+                                &rule.source_path,
+                                &String::from_utf8_lossy(&out.stdout),
+                            );
+                        }
+                        Ok(out) => {
+                            let code = out
+                                .status
+                                .code()
+                                .map(|c| c.to_string())
+                                .unwrap_or_else(|| "Unknown".to_string());
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            error!("Rsync failed with code {} for {}", code, rule.source_path);
+                            append_to_log(
+                                &device_config.name,
+                                &rule.source_path,
+                                &format!("FAILED (code {})\n{}", code, stderr),
+                            );
+                            has_errors = true;
+                        }
+                        Err(e) => {
+                            error!("Error during rsync execution: {}", e);
+                            append_to_log(
+                                &device_config.name,
+                                &rule.source_path,
+                                &format!("EXECUTION ERROR: {}", e),
+                            );
+                            has_errors = true;
+                        }
+                    }
                 }
-                Ok(out) => {
-                    let code = out
-                        .status
-                        .code()
-                        .map(|c| c.to_string())
-                        .unwrap_or_else(|| "Unknown".to_string());
-                    let stderr = String::from_utf8_lossy(&out.stderr);
-                    error!("Rsync failed with code {} for {}", code, rule.source_path);
-                    append_to_log(
-                        &device_config.name,
-                        &rule.source_path,
-                        &format!("FAILED (code {})\n{}", code, stderr),
-                    );
-                    has_errors = true;
+                CompressionType::Zip => {
+                    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                    let source_n = Path::new(&rule.source_path)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy();
+                    let zip_name = format!("{}_{}.zip", source_n, timestamp);
+                    let zip_path = full_dest.join(zip_name);
+
+                    info!("Compressing to ZIP: {:?}", zip_path);
+                    match create_zip_archive(&rule.source_path, &zip_path, &rule.exclude) {
+                        Ok(_) => info!("ZIP backup successful"),
+                        Err(e) => {
+                            error!("ZIP backup failed: {}", e);
+                            has_errors = true;
+                        }
+                    }
                 }
-                Err(e) => {
-                    error!("Error during rsync execution: {}", e);
-                    append_to_log(
-                        &device_config.name,
-                        &rule.source_path,
-                        &format!("EXECUTION ERROR: {}", e),
-                    );
-                    has_errors = true;
+                CompressionType::TarGz => {
+                    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                    let source_n = Path::new(&rule.source_path)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy();
+                    let tar_name = format!("{}_{}.tar.gz", source_n, timestamp);
+                    let tar_path = full_dest.join(tar_name);
+
+                    info!("Compressing to TarGz: {:?}", tar_path);
+                    match create_tar_gz_archive(&rule.source_path, &tar_path, &rule.exclude) {
+                        Ok(_) => info!("TarGz backup successful"),
+                        Err(e) => {
+                            error!("TarGz backup failed: {}", e);
+                            has_errors = true;
+                        }
+                    }
                 }
             }
         }
@@ -305,6 +358,99 @@ fn append_to_log(device_name: &str, source: &str, content: &str) {
     if let Err(e) = file.write_all(log_entry.as_bytes()) {
         error!("Could not write to log file: {}", e);
     }
+}
+
+fn create_zip_archive(
+    source_path: &str,
+    zip_path: &Path,
+    exclude_patterns: &[String],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let file = File::create(zip_path)?;
+    let mut zip = ZipWriter::new(file);
+    let options = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o755);
+
+    let prefix = Path::new(source_path);
+    let mut buffer = Vec::new();
+
+    for entry in walkdir::WalkDir::new(source_path) {
+        let entry = entry?;
+        let path = entry.path();
+        let name = path.strip_prefix(prefix)?;
+
+        if name.as_os_str().is_empty() {
+            continue;
+        }
+
+        // Check exclusions
+        let mut skipped = false;
+        for pattern in exclude_patterns {
+            if path.to_string_lossy().contains(pattern) {
+                skipped = true;
+                break;
+            }
+        }
+        if skipped {
+            continue;
+        }
+
+        if path.is_file() {
+            zip.start_file(name.to_string_lossy(), options)?;
+            let mut f = File::open(path)?;
+            f.read_to_end(&mut buffer)?;
+            zip.write_all(&buffer)?;
+            buffer.clear();
+        } else if !name.as_os_str().is_empty() {
+            zip.add_directory(name.to_string_lossy(), options)?;
+        }
+    }
+
+    zip.finish()?;
+    Ok(())
+}
+
+fn create_tar_gz_archive(
+    source_path: &str,
+    tar_path: &Path,
+    exclude_patterns: &[String],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let file = File::create(tar_path)?;
+    let enc = GzEncoder::new(file, Compression::default());
+    let mut tar = tar::Builder::new(enc);
+
+    let prefix = Path::new(source_path);
+
+    for entry in walkdir::WalkDir::new(source_path) {
+        let entry = entry?;
+        let path = entry.path();
+
+        // Check exclusions
+        let mut skipped = false;
+        for pattern in exclude_patterns {
+            if path.to_string_lossy().contains(pattern) {
+                skipped = true;
+                break;
+            }
+        }
+        if skipped {
+            continue;
+        }
+
+        if path.is_file() {
+            let mut f = File::open(path)?;
+            let name = path.strip_prefix(prefix)?;
+            tar.append_file(name, &mut f)?;
+        } else if path.is_dir() {
+            let name = path.strip_prefix(prefix)?;
+            if !name.as_os_str().is_empty() {
+                tar.append_dir(name, path)?;
+            }
+        }
+    }
+
+    tar.finish()?;
+    Ok(())
 }
 
 fn find_local_gitignore(source_path: &str) -> Result<std::path::PathBuf, std::io::Error> {

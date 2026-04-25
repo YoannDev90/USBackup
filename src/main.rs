@@ -5,8 +5,6 @@ mod models;
 mod notifications;
 mod storage;
 
-use crate::handler::trigger_backup;
-use crate::models::device::DeviceAction;
 use crate::storage::load_config;
 use log::{error, info, warn};
 use std::process::Command;

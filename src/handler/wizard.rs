@@ -1,8 +1,6 @@
 use crate::handler::github::{download_gitignore, fetch_gitignore_templates};
 use crate::handler::udev_utils::{find_usb_partitions, mount_partition};
-use crate::models::config::AppConfig;
 use crate::models::device::{BackupRule, DeviceAction, DeviceConfig};
-use crate::storage::save_config;
 use dialoguer::{Confirm, FuzzySelect, Input, MultiSelect, Select};
 use log::{debug, error, info, warn};
 use std::path::{Path, PathBuf};
@@ -211,23 +209,42 @@ pub async fn run_wizard(
         .default(true)
         .interact()?;
 
+    let compression_options = vec!["None", "Zip (.zip)", "TarGz (.tar.gz)"];
+    let compression_idx = Select::new()
+        .with_prompt("Compression type for this backup?")
+        .items(&compression_options)
+        .default(0)
+        .interact()?;
+
+    let compression = match compression_idx {
+        1 => crate::models::device::CompressionType::Zip,
+        2 => crate::models::device::CompressionType::TarGz,
+        _ => crate::models::device::CompressionType::None,
+    };
+
     for idx in chosen_indices {
         rules.push(BackupRule {
             source_path: available_sources[idx].clone(),
             destination_path: full_dest.to_string_lossy().to_string(),
             exclude: exclusions.clone(),
             delete_missing,
+            compression: compression.clone(),
         });
     }
 
-    let new_device = DeviceConfig {
+    let mut new_device = DeviceConfig {
         name: name.clone(),
         vendor_id: vid,
         product_id: pid,
         uuid: Some(uuid.to_string()),
+        signature: None,
         action: DeviceAction::Whitelist,
         backup_rules: rules,
     };
+
+    // Signer la configuration avec la clé secrète locale
+    let config_main = crate::storage::load_config();
+    crate::storage::sign_config(&mut new_device, &config_main.secret_key);
 
     if let Some(usb_root) = chosen_usb_root {
         crate::storage::save_device_config(&usb_root, &new_device)?;
