@@ -8,11 +8,19 @@ Automated USB backup agent written in Rust. This program runs 24/7 and instantly
 
 - **Real-time Monitoring**: Detects connect/disconnect events without polling (using native APIs via `nusb`).
 - **Modern TUI**: Beautiful Terminal User Interface built with `ratatui` for real-time activity tracking.
-- **Smart Auto-mount**: Automatically finds and mounts USB partitions using `udev` and `udisksctl` (cross-platform logic with Linux special handling).
+- **Smart Auto-mount**: Automatically finds and mounts USB partitions using `udev` and `udisksctl`.
 - **Interactive Whitelisting**: When a new device is detected, the app asks whether to remember it, ignore it, or ask again later.
 - **Background Agent**: Multi-threaded architecture to keep the UI responsive during backups.
 - **Flexible Configuration**: Manage specific backup rules (sources, destinations, exclusions) for each device.
 - **System Notifications**: Uses native desktop notifications to keep you informed.
+
+## 💻 Supported OS
+
+| OS          | Status          | Notes                                              |
+| :---------- | :-------------- | :------------------------------------------------- |
+| **Linux**   | ✅ Supported     | Native support for udev and auto-mount.            |
+| **Windows** | ❌ Not Supported | If you want Windows support, please **Fork + PR**. |
+| **macOS**   | ❌ Not Supported | If you want macOS support, please **Fork + PR**.   |
 
 ## 🛠️ Installation
 

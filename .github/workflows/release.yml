@@ -12,75 +12,34 @@ env:
 
 jobs:
     release:
-        name: Build & Release
-        runs-on: ${{ matrix.os }}
-        strategy:
-            fail-fast: false
-            matrix:
-                include:
-                    - os: ubuntu-latest
-                      target: x86_64-unknown-linux-gnu
-                      artifact_name: usbackup-linux-amd64
-                    - os: windows-latest
-                      target: x86_64-pc-windows-msvc
-                      artifact_name: usbackup-win64.exe
-
+        name: Build Linux
+        runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@v4
 
             - name: Install Rust
               uses: dtolnay/rust-toolchain@stable
               with:
-                  targets: ${{ matrix.target }}
+                  targets: x86_64-unknown-linux-gnu
 
-            - name: Install dependencies (Linux)
-              if: matrix.os == 'ubuntu-latest'
+            - name: Install dependencies
               run: |
                   sudo apt-get update
                   sudo apt-get install -y libudev-dev pkg-config
 
             - name: Build
-              run: |
-                  if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-                    cargo build --release --target ${{ matrix.target }}
-                  else
-                    cargo build --release --target ${{ matrix.target }} --no-default-features --features windows-hotplug
-                  fi
-              shell: bash
+              run: cargo build --release --target x86_64-unknown-linux-gnu
 
-            - name: Generate .deb package
-              if: matrix.os == 'ubuntu-latest'
+            - name: Prepare Artifact
               run: |
-                  cargo install cargo-deb
-                  cargo deb --target ${{ matrix.target }} --no-build
-                  mkdir -p target/${{ matrix.target }}/dist
-                  mv target/${{ matrix.target }}/debian/*.deb target/${{ matrix.target }}/dist/usbackup.deb
-
-            - name: Generate .rpm package
-              if: matrix.os == 'ubuntu-latest'
-              run: |
-                  cargo install cargo-generate-rpm
-                  cargo generate-rpm --target ${{ matrix.target }}
-                  mkdir -p target/${{ matrix.target }}/dist
-                  mv target/${{ matrix.target }}/generate-rpm/*.rpm target/${{ matrix.target }}/dist/usbackup.rpm
-
-            - name: Prepare binary (Linux)
-              if: matrix.os == 'ubuntu-latest'
-              run: |
-                  mkdir -p target/${{ matrix.target }}/dist
-                  cp target/${{ matrix.target }}/release/USBackup target/${{ matrix.target }}/dist/${{ matrix.artifact_name }}
-
-            - name: Prepare binary (Windows)
-              if: matrix.os == 'windows-latest'
-              run: |
-                  mkdir -p target/${{ matrix.target }}/dist
-                  cp target/${{ matrix.target }}/release/USBackup.exe target/${{ matrix.target }}/dist/${{ matrix.artifact_name }}
+                  mkdir -p dist
+                  cp target/x86_64-unknown-linux-gnu/release/USBackup dist/usbackup-linux-amd64
 
             - name: Upload artifacts
               uses: actions/upload-artifact@v4
               with:
-                  name: ${{ matrix.artifact_name }}
-                  path: target/${{ matrix.target }}/dist/*
+                  name: usbackup-linux-amd64
+                  path: dist/usbackup-linux-amd64
 
     github-release:
         name: Create GitHub Release
@@ -99,9 +58,13 @@ jobs:
               with:
                   tag_name: ${{ github.event.inputs.tag_name }}
                   name: Release ${{ github.event.inputs.tag_name }}
-                  files: |
-                      artifacts/**/*
+                  files: artifacts/usbackup-linux-amd64/usbackup-linux-amd64
                   draft: false
                   prerelease: false
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  name: Release ${{ github.event.inputs.tag_name }}
+                  files: |
+                      artifacts/**/*
+                  draft: false
+                  prerelease: false

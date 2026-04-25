@@ -15,50 +15,7 @@ ratatui = "0.30.0"
 crossterm = { version = "0.29", features = ["event-stream"] }
 ureq = "3.3.0"
 sysinfo = "0.38.4"
-udev = { version = "0.9.3", optional = true }
+udev = "0.9.3"
 env_logger = "0.11.10"
 log = "0.4.29"
 tokio = { version = "1.52.1", features = ["full"] }
-windows = { version = "0.58", features = [
-    "Win32_Storage_FileSystem",
-    "Win32_System_IO",
-    "Win32_Foundation",
-    "Win32_System_Registry",
-    "Win32_Devices_DeviceAndDriverInstallation",
-] }
-
-[features]
-default = ["linux-hotplug"]
-linux-hotplug = ["dep:udev"]
-windows-hotplug = ["dep:windows"]
-
-[target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", optional = true, features = [
-    "Win32_Storage_FileSystem",
-    "Win32_System_IO",
-    "Win32_Foundation",
-    "Win32_System_Registry",
-    "Win32_Devices_DeviceAndDriverInstallation",
-] }
-
-[package.metadata.generate-rpm]
-assets = [
-    { source = "target/x86_64-unknown-linux-gnu/release/USBackup", dest = "/usr/bin/usbackup", mode = "755" },
-]
-
-[package.metadata.deb]
-maintainer = "YoannDev90 <yoanndev@outlook.fr>"
-copyright = "2026, Yoann"
-license-file = ["LICENSE", "0"]
-extended-description = """
-Automated USB backup agent with TUI and auto-mount features.
-"""
-section = "utility"
-priority = "optional"
-assets = [
-    [
-        "target/x86_64-unknown-linux-gnu/release/USBackup",
-        "/usr/bin/usbackup",
-        "755",
-    ],
-]

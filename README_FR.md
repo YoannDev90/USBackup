@@ -13,7 +13,15 @@ Un agent de sauvegarde automatique pour périphériques USB écrit en Rust. Ce p
 - **Architecture Multi-thread** : L'interface reste fluide même pendant les sauvegardes lourdes en arrière-plan.
 - **Notifications Système** : Utilise les notifications natives du bureau pour vous tenir informé.
 
-## 🛠️ Installation
+## � OS Supportés
+
+| OS          | Statut         | Notes                                                               |
+| :---------- | :------------- | :------------------------------------------------------------------ |
+| **Linux**   | ✅ Supporté     | Support natif de udev et auto-montage.                              |
+| **Windows** | ❌ Non Supporté | Si vous voulez le support Windows, merci de faire un **Fork + PR**. |
+| **macOS**   | ❌ Non Supporté | Si vous voulez le support macOS, merci de faire un **Fork + PR**.   |
+
+## �🛠️ Installation
 
 ### Dépendances (Linux)
 Vous devez avoir les fichiers de développement `libudev` installés :
