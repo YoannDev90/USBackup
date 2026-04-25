@@ -1,7 +1,7 @@
+use crate::models::config::AppConfig;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::collections::HashMap;
-use crate::models::config::AppConfig;
 
 pub const CONFIG_PATH: &str = "backup_config.json";
 
@@ -18,6 +18,7 @@ pub fn load_config() -> AppConfig {
     }
 }
 
+#[allow(dead_code)]
 pub fn save_config(config: &AppConfig) {
     let content = serde_json::to_string_pretty(config).expect("Erreur de sérialisation");
     fs::write(CONFIG_PATH, content).expect("Erreur d'écriture config");

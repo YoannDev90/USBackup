@@ -147,6 +147,7 @@ pub fn trigger_backup(device_config: &crate::models::device::DeviceConfig) {
     notifications::notify_backup_success(&device_config.name);
 }
 
+#[allow(dead_code)]
 pub fn handle_error(device_name: &str, error: &str) {
     eprintln!(
         "{} Erreur sur {} : {}",
@@ -157,6 +158,7 @@ pub fn handle_error(device_name: &str, error: &str) {
     notifications::notify_backup_error(device_name, error);
 }
 
+#[allow(dead_code)]
 pub fn ask_user_action(vid: u16, pid: u16, product: &str) -> DeviceAction {
     println!(
         "\n{}",

@@ -1,6 +1,3 @@
-use crate::models::config::AppConfig;
-use crate::storage::load_config;
-
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -26,14 +23,12 @@ pub enum TuiEvent {
 
 pub struct TuiApp {
     pub logs: Vec<String>,
-    pub config: AppConfig,
 }
 
 impl TuiApp {
     pub fn new() -> Self {
         Self {
             logs: vec!["Service de surveillance démarré...".to_string()],
-            config: load_config(),
         }
     }
 

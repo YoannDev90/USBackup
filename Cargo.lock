@@ -9,7 +9,6 @@ dependencies = [
  "chrono",
  "colored",
  "crossterm",
- "disks",
  "env_logger",
  "futures-lite",
  "log",
@@ -603,12 +602,6 @@ dependencies = [
  "block-buffer",
  "crypto-common",
 ]
-
-[[package]]
-name = "disks"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4239559b84649d02b3469dcb4432755372dc5addb689f136ef264eb18287b1f6"
 
 [[package]]
 name = "dispatch2"

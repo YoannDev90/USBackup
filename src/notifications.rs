@@ -23,6 +23,7 @@ pub fn notify_backup_success(device_name: &str) {
     );
 }
 
+#[allow(dead_code)]
 pub fn notify_backup_error(device_name: &str, error: &str) {
     send_notification(
         "❌ Backup Failed",

@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Fil de surveillance hotplug (arrière-plan)
     thread::spawn(move || {
-        let mut config = load_config();
+        let config = load_config();
         let watch = match nusb::watch_devices() {
             Ok(w) => w,
             Err(e) => {
