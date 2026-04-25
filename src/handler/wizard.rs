@@ -97,7 +97,7 @@ pub async fn run_wizard(
 
     // 2. Select the destination folder ON the key
     let dest_folder: String = Input::new()
-        .with_prompt("Destination folder on the key (e.g., backups/my_pc)")
+        .with_prompt("Relative destination folder on the key (e.g., backups/my_pc)")
         .default("backups/default".into())
         .interact_text()?;
 
@@ -223,7 +223,7 @@ pub async fn run_wizard(
     for idx in chosen_indices {
         rules.push(BackupRule {
             source_path: available_sources[idx].clone(),
-            destination_path: full_dest.to_string_lossy().to_string(),
+            destination_path: dest_folder.clone(),
             exclude: exclusions.clone(),
             delete_missing,
             compression: compression.clone(),

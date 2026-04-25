@@ -206,7 +206,16 @@ async fn inner_trigger_backup(
 
         let mut has_errors = false;
         for rule in &device_config.backup_rules {
-            let full_dest = usb_path.join(rule.destination_path.trim_start_matches('/'));
+            // Sécurité : Empêcher l'utilisation de chemins absolus ou de traversal pour la destination
+            if rule.destination_path.starts_with('/') {
+                warn!("Destination path '{}' is absolute. Forcing relative to USB root.", rule.destination_path);
+            }
+            
+            let sanitized_dest = rule.destination_path
+                .trim_start_matches('/')
+                .replace("..", "__"); // Protection basique contre le path traversal
+
+            let full_dest = usb_path.join(sanitized_dest);
 
             info!("Syncing {} to {:?}", rule.source_path, full_dest);
 

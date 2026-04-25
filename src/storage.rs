@@ -9,23 +9,47 @@ use std::path::Path;
 pub const CONFIG_PATH: &str = "backup_config.toml";
 
 pub fn load_config() -> AppConfig {
-    let mut config = if Path::new(CONFIG_PATH).exists() {
+    if Path::new(CONFIG_PATH).exists() {
         match fs::read_to_string(CONFIG_PATH) {
-            Ok(content) => toml::from_str(&content).unwrap_or_else(|_| AppConfig::default()),
-            Err(_) => AppConfig::default(),
+            Ok(content) => {
+                match toml::from_str(&content) {
+                    Ok(mut config) => {
+                        // Générer une clé secrète si elle n'existe pas
+                        if let AppConfig { secret_key, .. } = &config {
+                            if secret_key.is_empty() {
+                                let mut key = [0u8; 32];
+                                rand::rng().fill(&mut key);
+                                config.secret_key = hex::encode(key);
+                                let _ = save_config(&config);
+                            }
+                        }
+                        config
+                    }
+                    Err(e) => {
+                        eprintln!("Erreur lors du parsing de {} : {}. Utilisation de la config par défaut.", CONFIG_PATH, e);
+                        generate_default_config()
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "Erreur lors de la lecture de {} : {}. Utilisation de la config par défaut.",
+                    CONFIG_PATH, e
+                );
+                generate_default_config()
+            }
         }
     } else {
-        AppConfig::default()
-    };
-
-    // Générer une clé secrète si elle n'existe pas
-    if config.secret_key.is_empty() {
-        let mut key = [0u8; 32];
-        rand::rng().fill(&mut key);
-        config.secret_key = hex::encode(key);
-        let _ = save_config(&config);
+        generate_default_config()
     }
+}
 
+fn generate_default_config() -> AppConfig {
+    let mut config = AppConfig::default();
+    let mut key = [0u8; 32];
+    rand::rng().fill(&mut key);
+    config.secret_key = hex::encode(key);
+    let _ = save_config(&config);
     config
 }
 

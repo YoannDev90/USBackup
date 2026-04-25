@@ -58,12 +58,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 let mut device_uuid = None;
                 for i in 0..5 {
                     if i > 0 {
-                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
                     }
+                    
+                    // Filtrer par VID/PID pour éviter de checker toutes les partitions à chaque fois
                     let parts = crate::handler::udev_utils::find_usb_partitions();
-                    debug!("Parts found: {:?}", parts);
+                    debug!("Checking USB partitions: {:?}", parts);
+                    
                     for part in parts {
                         if let Some(u) = crate::handler::udev_utils::get_partition_uuid(&part) {
+                            // On pourrait encore affiner ici si on avait accès au VID/PID de la partition via udev
                             device_uuid = Some(u);
                             break;
                         }
