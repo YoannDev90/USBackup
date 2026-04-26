@@ -7,14 +7,6 @@ pub enum DeviceAction {
     AskEachTime,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
-pub enum CompressionType {
-    #[default]
-    None,
-    Zip,
-    TarGz,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BackupRule {
     pub source_path: String,
@@ -22,8 +14,6 @@ pub struct BackupRule {
     pub exclude: Vec<String>,
     #[serde(default = "default_delete")]
     pub delete_missing: bool,
-    #[serde(default)]
-    pub compression: CompressionType,
 }
 
 fn default_delete() -> bool {

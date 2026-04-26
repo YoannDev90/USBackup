@@ -1,16 +1,14 @@
 use crate::handler::udev_utils::{find_usb_partitions, mount_partition};
-use crate::models::device::{CompressionType, DeviceConfig};
+use crate::models::device::DeviceConfig;
 use crate::notifications;
-use flate2::write::GzEncoder;
-use flate2::Compression;
+use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, error, info, warn};
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::Path;
 use sysinfo::Disks;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
-use zip::write::SimpleFileOptions;
-use zip::ZipWriter;
 
 // Laisse cette fonction publique si tu prévois de l'appeler ailleurs,
 // sinon on peut la marquer comme autorisée ou la supprimer.
@@ -233,113 +231,117 @@ async fn inner_trigger_backup(
                 continue;
             }
 
-            match rule.compression {
-                CompressionType::None => {
-                    // Use rsync for efficient synchronization
-                    let mut cmd = TokioCommand::new("rsync");
-                    cmd.arg("-avz").arg("--progress");
+            // Use rsync for efficient synchronization
+            let mut cmd = TokioCommand::new("rsync");
+            // -a: archive, -v: verbose, -z: compress during transfer, -P: progress and partial
+            cmd.arg("-avzP");
 
-                    if rule.delete_missing {
-                        cmd.arg("--delete");
-                    }
+            if rule.delete_missing {
+                cmd.arg("--delete");
+            }
 
-                    // Add exclusions
-                    for pattern in &rule.exclude {
-                        cmd.arg(format!("--exclude={}", pattern));
-                    }
+            // Add exclusions
+            for pattern in &rule.exclude {
+                cmd.arg(format!("--exclude={}", pattern));
+            }
 
-                    // Automatic .gitignore detection
-                    if let Ok(gitignore_path) = find_local_gitignore(&rule.source_path) {
-                        info!(
-                            "Using local .gitignore exclusions from {:?}",
-                            gitignore_path
-                        );
-                        cmd.arg(format!(
-                            "--exclude-from={}",
-                            gitignore_path.to_string_lossy()
-                        ));
-                    }
+            // Automatic .gitignore detection
+            if let Ok(gitignore_path) = find_local_gitignore(&rule.source_path) {
+                info!(
+                    "Using local .gitignore exclusions from {:?}",
+                    gitignore_path
+                );
+                cmd.arg(format!(
+                    "--exclude-from={}",
+                    gitignore_path.to_string_lossy()
+                ));
+            }
 
-                    let output = cmd.arg(&rule.source_path).arg(&full_dest).output().await;
+            cmd.arg(&rule.source_path).arg(&full_dest);
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::piped());
 
-                    match output {
-                        Ok(out) if out.status.success() => {
-                            info!("Success for {}", rule.source_path);
-                            append_to_log(
-                                &device_config.name,
-                                &rule.source_path,
-                                &String::from_utf8_lossy(&out.stdout),
-                            );
+            let mut child = match cmd.spawn() {
+                Ok(c) => c,
+                Err(e) => {
+                    error!("Failed to spawn rsync: {}", e);
+                    has_errors = true;
+                    continue;
+                }
+            };
+
+            let stdout = child.stdout.take().unwrap();
+            let stderr = child.stderr.take().unwrap();
+            let mut stdout_reader = BufReader::new(stdout).lines();
+            let mut stderr_reader = BufReader::new(stderr).lines();
+
+            let pb = ProgressBar::new_spinner();
+            pb.set_style(
+                ProgressStyle::default_spinner()
+                    .template("{spinner:.green} [{elapsed_precise}] {msg}")
+                    .unwrap(),
+            );
+            pb.set_message(format!("Syncing {}...", rule.source_path));
+
+            let mut full_output = String::new();
+            let mut error_output = String::new();
+
+            loop {
+                tokio::select! {
+                    line = stdout_reader.next_line() => {
+                        match line {
+                            Ok(Some(l)) => {
+                                // Rsync --progress outputs lines like:
+                                //       32,768   0%    0.00kB/s    0:00:00
+                                // We try to catch the percentage if present
+                                if l.contains('%') {
+                                    let parts: Vec<&str> = l.split_whitespace().collect();
+                                    for part in parts {
+                                        if part.contains('%') {
+                                            pb.set_message(format!("{} - {}", rule.source_path, part));
+                                        }
+                                    }
+                                }
+                                full_output.push_str(&l);
+                                full_output.push('\n');
+                            }
+                            _ => break,
                         }
-                        Ok(out) => {
-                            let code = out
-                                .status
-                                .code()
-                                .map(|c| c.to_string())
-                                .unwrap_or_else(|| "Unknown".to_string());
-                            let stderr = String::from_utf8_lossy(&out.stderr);
-                            error!("Rsync failed with code {} for {}", code, rule.source_path);
-                            notifications::notify_backup_error(
-                                &device_config.name,
-                                &format!("Erreur rsync (code {}). Consultez les logs.", code),
-                            );
-                            append_to_log(
-                                &device_config.name,
-                                &rule.source_path,
-                                &format!("FAILED (code {})\n{}", code, stderr),
-                            );
-                            has_errors = true;
-                        }
-                        Err(e) => {
-                            error!("Error during rsync execution: {}", e);
-                            notifications::notify_backup_error(
-                                &device_config.name,
-                                &format!("Erreur d'exécution rsync : {}", e),
-                            );
-                            append_to_log(
-                                &device_config.name,
-                                &rule.source_path,
-                                &format!("EXECUTION ERROR: {}", e),
-                            );
-                            has_errors = true;
+                    }
+                    line = stderr_reader.next_line() => {
+                        if let Ok(Some(l)) = line {
+                            error_output.push_str(&l);
+                            error_output.push('\n');
                         }
                     }
                 }
-                CompressionType::Zip => {
-                    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-                    let source_n = Path::new(&rule.source_path)
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy();
-                    let zip_name = format!("{}_{}.zip", source_n, timestamp);
-                    let zip_path = full_dest.join(zip_name);
+            }
 
-                    info!("Compressing to ZIP: {:?}", zip_path);
-                    match create_zip_archive(&rule.source_path, &zip_path, &rule.exclude) {
-                        Ok(_) => info!("ZIP backup successful"),
-                        Err(e) => {
-                            error!("ZIP backup failed: {}", e);
-                            has_errors = true;
-                        }
-                    }
+            let status = child.wait().await;
+            pb.finish_and_clear();
+
+            match status {
+                Ok(s) if s.success() => {
+                    info!("Success for {}", rule.source_path);
+                    append_to_log(&device_config.name, &rule.source_path, &full_output);
                 }
-                CompressionType::TarGz => {
-                    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-                    let source_n = Path::new(&rule.source_path)
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy();
-                    let tar_name = format!("{}_{}.tar.gz", source_n, timestamp);
-                    let tar_path = full_dest.join(tar_name);
-
-                    info!("Compressing to TarGz: {:?}", tar_path);
-                    match create_tar_gz_archive(&rule.source_path, &tar_path, &rule.exclude) {
-                        Ok(_) => info!("TarGz backup successful"),
-                        Err(e) => {
-                            error!("TarGz backup failed: {}", e);
-                            has_errors = true;
-                        }
-                    }
+                Ok(s) => {
+                    let code = s.code().unwrap_or(-1);
+                    error!("Rsync failed with code {} for {}", code, rule.source_path);
+                    notifications::notify_backup_error(
+                        &device_config.name,
+                        &format!("Erreur rsync (code {}). Consultez les logs.", code),
+                    );
+                    append_to_log(
+                        &device_config.name,
+                        &rule.source_path,
+                        &format!("FAILED (code {})\n{}", code, error_output),
+                    );
+                    has_errors = true;
+                }
+                Err(e) => {
+                    error!("Error waiting for rsync: {}", e);
+                    has_errors = true;
                 }
             }
         }
@@ -393,99 +395,6 @@ fn append_to_log(device_name: &str, source: &str, content: &str) {
     if let Err(e) = file.write_all(log_entry.as_bytes()) {
         error!("Could not write to log file: {}", e);
     }
-}
-
-fn create_zip_archive(
-    source_path: &str,
-    zip_path: &Path,
-    exclude_patterns: &[String],
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let file = File::create(zip_path)?;
-    let mut zip = ZipWriter::new(file);
-    let options = SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated)
-        .unix_permissions(0o755);
-
-    let prefix = Path::new(source_path);
-    let mut buffer = Vec::new();
-
-    for entry in walkdir::WalkDir::new(source_path) {
-        let entry = entry?;
-        let path = entry.path();
-        let name = path.strip_prefix(prefix)?;
-
-        if name.as_os_str().is_empty() {
-            continue;
-        }
-
-        // Check exclusions
-        let mut skipped = false;
-        for pattern in exclude_patterns {
-            if path.to_string_lossy().contains(pattern) {
-                skipped = true;
-                break;
-            }
-        }
-        if skipped {
-            continue;
-        }
-
-        if path.is_file() {
-            zip.start_file(name.to_string_lossy(), options)?;
-            let mut f = File::open(path)?;
-            f.read_to_end(&mut buffer)?;
-            zip.write_all(&buffer)?;
-            buffer.clear();
-        } else if !name.as_os_str().is_empty() {
-            zip.add_directory(name.to_string_lossy(), options)?;
-        }
-    }
-
-    zip.finish()?;
-    Ok(())
-}
-
-fn create_tar_gz_archive(
-    source_path: &str,
-    tar_path: &Path,
-    exclude_patterns: &[String],
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let file = File::create(tar_path)?;
-    let enc = GzEncoder::new(file, Compression::default());
-    let mut tar = tar::Builder::new(enc);
-
-    let prefix = Path::new(source_path);
-
-    for entry in walkdir::WalkDir::new(source_path) {
-        let entry = entry?;
-        let path = entry.path();
-
-        // Check exclusions
-        let mut skipped = false;
-        for pattern in exclude_patterns {
-            if path.to_string_lossy().contains(pattern) {
-                skipped = true;
-                break;
-            }
-        }
-        if skipped {
-            continue;
-        }
-
-        if path.is_file() {
-            let mut f = File::open(path)?;
-            let name = path.strip_prefix(prefix)?;
-            tar.append_file(name, &mut f)?;
-        } else if path.is_dir() {
-            let name = path.strip_prefix(prefix)?;
-            if !name.as_os_str().is_empty() {
-                tar.append_dir(name, path)?;
-            }
-        }
-    }
-
-    tar.finish()?;
-    Ok(())
 }
 
 fn find_local_gitignore(source_path: &str) -> Result<std::path::PathBuf, std::io::Error> {

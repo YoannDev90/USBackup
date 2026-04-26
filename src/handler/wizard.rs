@@ -101,8 +101,6 @@ pub async fn run_wizard(
         .default("backups/default".into())
         .interact_text()?;
 
-    let full_dest = usb_root.join(dest_folder.trim_start_matches('/'));
-
     // 3. Select source folders to backup (simplified UI)
     let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
     let common_dirs = vec![
@@ -207,26 +205,12 @@ pub async fn run_wizard(
         .default(true)
         .interact()?;
 
-    let compression_options = vec!["None", "Zip (.zip)", "TarGz (.tar.gz)"];
-    let compression_idx = Select::new()
-        .with_prompt("Compression type for this backup?")
-        .items(&compression_options)
-        .default(0)
-        .interact()?;
-
-    let compression = match compression_idx {
-        1 => crate::models::device::CompressionType::Zip,
-        2 => crate::models::device::CompressionType::TarGz,
-        _ => crate::models::device::CompressionType::None,
-    };
-
     for idx in chosen_indices {
         rules.push(BackupRule {
             source_path: available_sources[idx].clone(),
             destination_path: dest_folder.clone(),
             exclude: exclusions.clone(),
             delete_missing,
-            compression: compression.clone(),
         });
     }
 
