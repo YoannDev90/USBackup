@@ -1,16 +1,27 @@
 use crate::models::config::AppConfig;
 use crate::models::device::DeviceConfig;
+use directories::ProjectDirs;
 use hmac::{Hmac, KeyInit, Mac};
 use rand::RngExt;
 use sha2::Sha256;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-pub const CONFIG_PATH: &str = "backup_config.toml";
+pub fn get_config_path() -> PathBuf {
+    if let Some(proj_dirs) = ProjectDirs::from("com", "usbackup", "USBackup") {
+        let config_dir = proj_dirs.config_dir();
+        if !config_dir.exists() {
+            let _ = fs::create_dir_all(config_dir);
+        }
+        return config_dir.join("backup_config.toml");
+    }
+    PathBuf::from("backup_config.toml")
+}
 
 pub fn load_config() -> AppConfig {
-    if Path::new(CONFIG_PATH).exists() {
-        match fs::read_to_string(CONFIG_PATH) {
+    let config_path = get_config_path();
+    if config_path.exists() {
+        match fs::read_to_string(&config_path) {
             Ok(content) => {
                 match toml::from_str::<AppConfig>(&content) {
                     Ok(mut config) => {
@@ -24,15 +35,18 @@ pub fn load_config() -> AppConfig {
                         config
                     }
                     Err(e) => {
-                        eprintln!("Erreur lors du parsing de {} : {}. Utilisation de la config par défaut.", CONFIG_PATH, e);
+                        eprintln!(
+                            "Erreur lors du parsing de {:?} : {}. Utilisation de la config par défaut.",
+                            config_path, e
+                        );
                         generate_default_config()
                     }
                 }
             }
             Err(e) => {
                 eprintln!(
-                    "Erreur lors de la lecture de {} : {}. Utilisation de la config par défaut.",
-                    CONFIG_PATH, e
+                    "Erreur lors de la lecture de {:?} : {}. Utilisation de la config par défaut.",
+                    config_path, e
                 );
                 generate_default_config()
             }
@@ -53,7 +67,7 @@ fn generate_default_config() -> AppConfig {
 
 pub fn save_config(config: &AppConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let content = toml::to_string_pretty(config)?;
-    fs::write(CONFIG_PATH, content)?;
+    fs::write(get_config_path(), content)?;
     Ok(())
 }
 

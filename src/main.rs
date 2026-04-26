@@ -20,6 +20,39 @@ fn check_dependencies() -> Result<(), Box<dyn std::error::Error + Send + Sync>> 
     Ok(())
 }
 
+fn install_systemd_service() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let home = std::env::var("HOME")?;
+    let exe_path = std::env::current_exe()?;
+    let service_dir = format!("{}/.config/systemd/user", home);
+    let service_path = format!("{}/usbackup.service", service_dir);
+
+    if std::path::Path::new(&service_path).exists() {
+        return Ok(());
+    }
+
+    info!("Installation du service systemd utilisateur...");
+    std::fs::create_dir_all(&service_dir)?;
+
+    let template = include_str!("../usbackup.service");
+    let service_content = template.replace("%EXE_PATH%", &exe_path.display().to_string());
+
+    std::fs::write(&service_path, service_content)?;
+
+    // Activer et démarrer le service
+    Command::new("systemctl")
+        .arg("--user")
+        .arg("daemon-reload")
+        .output()?;
+    Command::new("systemctl")
+        .arg("--user")
+        .arg("enable")
+        .arg("usbackup.service")
+        .output()?;
+
+    info!("Service systemd installé et activé avec succès.");
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Initialise le logger
@@ -27,6 +60,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Vérifier les dépendances système
     check_dependencies()?;
+
+    // Installer le service si nécessaire
+    if let Err(e) = install_systemd_service() {
+        warn!("Impossible d'installer le service systemd : {}", e);
+    }
 
     info!("Service USBackup démarré. En attente de périphériques...");
 
@@ -60,11 +98,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     if i > 0 {
                         tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
                     }
-                    
+
                     // Filtrer par VID/PID pour éviter de checker toutes les partitions à chaque fois
                     let parts = crate::handler::udev_utils::find_usb_partitions();
                     debug!("Checking USB partitions: {:?}", parts);
-                    
+
                     for part in parts {
                         if let Some(u) = crate::handler::udev_utils::get_partition_uuid(&part) {
                             // On pourrait encore affiner ici si on avait accès au VID/PID de la partition via udev

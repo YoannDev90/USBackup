@@ -205,12 +205,36 @@ pub async fn run_wizard(
         .default(true)
         .interact()?;
 
+    let incremental = Confirm::new()
+        .with_prompt("Enable incremental snapshots (versioning)?")
+        .default(false)
+        .interact()?;
+
+    let unmount_after = Confirm::new()
+        .with_prompt("Automatically unmount the key after backup?")
+        .default(true)
+        .interact()?;
+
+    let post_script: String = Input::new()
+        .with_prompt("Optional post-backup shell command (leave empty for none)")
+        .allow_empty(true)
+        .interact_text()?;
+
+    let post_backup_script = if post_script.is_empty() {
+        None
+    } else {
+        Some(post_script)
+    };
+
     for idx in chosen_indices {
         rules.push(BackupRule {
             source_path: available_sources[idx].clone(),
             destination_path: dest_folder.clone(),
             exclude: exclusions.clone(),
             delete_missing,
+            incremental,
+            post_backup_script: post_backup_script.clone(),
+            unmount_after,
         });
     }
 

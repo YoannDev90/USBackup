@@ -14,6 +14,12 @@ pub struct BackupRule {
     pub exclude: Vec<String>,
     #[serde(default = "default_delete")]
     pub delete_missing: bool,
+    #[serde(default)]
+    pub incremental: bool,
+    #[serde(default)]
+    pub post_backup_script: Option<String>,
+    #[serde(default)]
+    pub unmount_after: bool,
 }
 
 fn default_delete() -> bool {

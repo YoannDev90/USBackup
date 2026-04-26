@@ -1,11 +1,13 @@
 use crate::handler::udev_utils::{find_usb_partitions, mount_partition};
 use crate::models::device::DeviceConfig;
 use crate::notifications;
+use chrono;
+use directories::ProjectDirs;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, error, info, warn};
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use sysinfo::Disks;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
@@ -206,10 +208,14 @@ async fn inner_trigger_backup(
         for rule in &device_config.backup_rules {
             // Sécurité : Empêcher l'utilisation de chemins absolus ou de traversal pour la destination
             if rule.destination_path.starts_with('/') {
-                warn!("Destination path '{}' is absolute. Forcing relative to USB root.", rule.destination_path);
+                warn!(
+                    "Destination path '{}' is absolute. Forcing relative to USB root.",
+                    rule.destination_path
+                );
             }
-            
-            let sanitized_dest = rule.destination_path
+
+            let sanitized_dest = rule
+                .destination_path
                 .trim_start_matches('/')
                 .replace("..", "__"); // Protection basique contre le path traversal
 
@@ -257,7 +263,30 @@ async fn inner_trigger_backup(
                 ));
             }
 
-            cmd.arg(&rule.source_path).arg(&full_dest);
+            // Incremental snapshots handling
+            let final_dest = if rule.incremental {
+                let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+                let snapshot_path = full_dest.join(&timestamp);
+                let latest_link = full_dest.join("latest");
+
+                if latest_link.exists() {
+                    cmd.arg(format!("--link-dest={}", latest_link.to_string_lossy()));
+                }
+
+                if let Err(e) = std::fs::create_dir_all(&snapshot_path) {
+                    error!(
+                        "Unable to create snapshot directory {:?}: {}",
+                        snapshot_path, e
+                    );
+                    has_errors = true;
+                    continue;
+                }
+                snapshot_path
+            } else {
+                full_dest.clone()
+            };
+
+            cmd.arg(&rule.source_path).arg(&final_dest);
             cmd.stdout(std::process::Stdio::piped());
             cmd.stderr(std::process::Stdio::piped());
 
@@ -278,12 +307,18 @@ async fn inner_trigger_backup(
             let pb = ProgressBar::new(100);
             pb.set_style(
                 ProgressStyle::with_template(
-                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg} ({pos}%)"
+                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg} ({pos}%)",
                 )
                 .unwrap()
                 .progress_chars("#>-"),
             );
-            pb.set_message(format!("Syncing {}", Path::new(&rule.source_path).file_name().unwrap_or_default().to_string_lossy()));
+            pb.set_message(format!(
+                "Syncing {}",
+                Path::new(&rule.source_path)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+            ));
 
             let mut full_output = String::new();
             let mut error_output = String::new();
@@ -328,6 +363,24 @@ async fn inner_trigger_backup(
                 Ok(s) if s.success() => {
                     info!("Success for {}", rule.source_path);
                     append_to_log(&device_config.name, &rule.source_path, &full_output);
+
+                    // Update 'latest' symlink for incremental backups
+                    if rule.incremental {
+                        let latest_link = full_dest.join("latest");
+                        if latest_link.exists() {
+                            let _ = std::fs::remove_file(&latest_link);
+                        }
+                        // Need the relative path for the symlink to be portable
+                        if let Some(snapshot_name) = final_dest.file_name() {
+                            let _ = std::os::unix::fs::symlink(snapshot_name, &latest_link);
+                        }
+                    }
+
+                    // Post-backup script
+                    if let Some(script) = &rule.post_backup_script {
+                        info!("Running post-backup script: {}", script);
+                        let _ = TokioCommand::new("sh").arg("-c").arg(script).spawn();
+                    }
                 }
                 Ok(s) => {
                     let code = s.code().unwrap_or(-1);
@@ -358,6 +411,19 @@ async fn inner_trigger_backup(
         } else {
             notifications::notify_backup_success(&device_config.name);
         }
+
+        // Global Post-backup actions for the device
+        let should_unmount = device_config.backup_rules.iter().any(|r| r.unmount_after);
+
+        if should_unmount {
+            info!("Unmounting device {:?}", usb_path);
+            let _ = TokioCommand::new("udisksctl")
+                .arg("unmount")
+                .arg("-b")
+                .arg(usb_path.to_string_lossy().to_string()) // This might need dev node instead of mount point
+                .output()
+                .await;
+        }
     } else {
         warn!("Unable to locate mount point.");
         notifications::notify_backup_error(
@@ -368,20 +434,19 @@ async fn inner_trigger_backup(
     }
 }
 
-fn append_to_log(device_name: &str, source: &str, content: &str) {
-    let log_dir = dirs::home_dir()
-        .map(|h| h.join(".local/share/usbackup/logs"))
-        .unwrap_or_else(|| Path::new("/tmp/usbackup/logs").to_path_buf());
-
-    info!("Logging to: {:?}", log_dir);
-
-    if let Err(e) = std::fs::create_dir_all(&log_dir) {
-        error!("Could not create log directory: {}", e);
-        return;
+fn get_log_path(device_name: &str) -> PathBuf {
+    if let Some(proj_dirs) = ProjectDirs::from("com", "usbackup", "USBackup") {
+        let log_dir = proj_dirs.data_dir().join("logs");
+        if !log_dir.exists() {
+            let _ = std::fs::create_dir_all(&log_dir);
+        }
+        return log_dir.join(format!("{}.log", device_name.replace(' ', "_")));
     }
+    PathBuf::from(format!("{}.log", device_name.replace(' ', "_")))
+}
 
-    let log_file = log_dir.join(format!("{}.log", device_name.replace(' ', "_")));
-    info!("Writing to file: {:?}", log_file);
+fn append_to_log(device_name: &str, source: &str, content: &str) {
+    let log_file = get_log_path(device_name);
     let mut file = match OpenOptions::new().create(true).append(true).open(&log_file) {
         Ok(f) => f,
         Err(e) => {

@@ -1,0 +1,12 @@
+[Unit]
+Description=USBackup - Automatic USB Backup Service
+After=network.target
+
+[Service]
+ExecStart=%EXE_PATH%
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target
