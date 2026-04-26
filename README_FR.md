@@ -6,13 +6,13 @@ Un agent de sauvegarde automatique pour périphériques USB écrit en Rust. Ce p
 
 ## ✨ Fonctionnalités
 
-- **Configuration Décentralisée** : Les paramètres sont stockés directement sur les périphériques USB (`.usbackup.toml`), ce qui les rend portables.
-- **Sécurité HMAC** : Les configurations sont signées cryptographiquement avec une clé secrète locale pour empêcher toute exécution non autorisée.
-- **Plusieurs Formats de Sauvegarde** : Choisissez entre la synchronisation standard (`rsync`), des archives ZIP ou des archives TarGz.
-- **Auto-montage Intelligent** : Trouve et monte automatiquement les partitions USB via `udev` et `udisksctl`.
-- **Whitelisting interactif** : Lorsqu'un nouvel appareil est détecté, l'application vous demande s'il faut le mémoriser, l'ignorer ou poser la question plus tard.
-- **Architecture Multi-thread** : L'agent reste réactif même pendant les sauvegardes lourdes.
-- **Notifications Système** : Utilise les notifications natives du bureau pour vous tenir informé.
+- **Détection temps-réel** : Détecte les branchements/débranchements sans polling (via `nusb`).
+- **Standards XDG** : Configuration et logs suivent les standards Linux (`~/.config/usbackup` et `~/.local/share/usbackup`).
+- **Snapshots Incrémentaux** : Support du versionnage par date via les *hard links* rsync (très économe en espace).
+- **Actions Post-Sauvegarde** : Démontage automatique ou exécution de scripts personnalisés.
+- **Configuration Décentralisée** : Les paramètres sont stockés directement sur les périphériques USB (`.usbackup.toml`).
+- **Sécurité HMAC** : Signatures cryptographiques pour empêcher toute exécution non autorisée.
+- **Auto-montage Intelligent** : Monte automatiquement les partitions USB via `udev` et `udisksctl`.
 ## 🛠️ Comment ça marche (Technique)
 
 USBackup utilise un modèle de **Configuration Décentralisée** avec une approche sécurisée **Zero-Trust** :
@@ -24,9 +24,10 @@ USBackup utilise un modèle de **Configuration Décentralisée** avec une approc
    - Chaque config sur clé (`.usbackup.toml`) est signée avec ce secret via **HMAC-SHA256**.
    - Cela empêche un utilisateur malveillant d'injecter sa propre configuration pour voler des fichiers.
 4. **Exécution** :
-   - **Mode Miroir** : Synchronisation incrémentale via l'algorithme delta de `rsync`.
-   - **Mode Archive** : Crée des fichiers horodatés `.zip` ou `.tar.gz` pour le versionnage.
-   - **Exclusions Intelligentes** : Respecte automatiquement les règles de votre `.gitignore` local.
+   - **Mode Miroir** : Synchronisation simple.
+   - **Snapshots Incrémentaux** : Utilise `rsync --link-dest` pour créer des versions datées sans doubler l'espace disque.
+   - **Post-Sauvegarde** : Démontage automatique ou script custom.
+   - **Exclusions Intelligentes** : Respecte les règles `.gitignore` locales.
 ## � OS Supportés
 
 | OS          | Statut         | Notes                                                               |
@@ -54,8 +55,9 @@ Vous devez avoir les fichiers de développement `libudev` installés :
 
 USBackup utilise un modèle de configuration décentralisé.
 
-1. **`backup_config.toml`** (Local) : Stocké dans le dossier de l'application, il contient la liste des UUID approuvés et votre **clé secrète** machine pour la signature.
-2. **`.usbackup.toml`** (Périphérique) : Stocké à la racine de votre clé USB. Il contient les règles de sauvegarde et la signature HMAC.
+1. **Config Locale** : Dans `~/.config/usbackup/backup_config.toml`, contient les UUID approuvés et votre **clé secrète**.
+2. **Logs** : Les logs détaillés sont dans `~/.local/share/usbackup/logs/`.
+3. **`.usbackup.toml`** (Périphérique) : À la racine de votre clé USB.
 
 ### Exemple `.usbackup.toml` :
 
@@ -71,7 +73,9 @@ action = "Whitelist"
 source_path = "/home/user/Documents"
 destination_path = "backups/docs"
 exclude = [".tmp", "cache/"]
-compression = "Zip" # Options: None, Zip, TarGz
+incremental = true           # Active les snapshots
+unmount_after = true        # Démontage auto
+post_backup_script = "notify-send 'Backup terminée !'"
 ```
 
 ### Actions disponibles :
@@ -83,10 +87,12 @@ compression = "Zip" # Options: None, Zip, TarGz
 
 - [x] Configuration décentralisée TOML.
 - [x] Signature HMAC pour la sécurité.
-- [x] Support de la compression (ZIP, TarGz).
 - [x] Montage automatique des partitions.
-- [ ] Interface TUI moderne avec `ratatui`.
+- [x] Standards XDG (chemins config/logs).
+- [x] Snapshots incrémentaux (versionnage).
+- [x] Actions post-sauvegarde (script/démontage).
 - [x] Notifications système.
+- [ ] Sauvegardes multi-cibles (SSH distant/Cloud).
 
 ## ⚖️ Licence
 

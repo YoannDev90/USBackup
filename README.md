@@ -7,9 +7,11 @@ Automated USB backup agent written in Rust. This program runs 24/7 and instantly
 ## ✨ Features
 
 - **Real-time Monitoring**: Detects connect/disconnect events without polling (using native APIs via `nusb`).
+- **Standard XDG Paths**: Configuration and logs now follow Linux standards (`~/.config/usbackup` and `~/.local/share/usbackup`).
+- **Incremental Snapshots**: Supports time-based versioning using `rsync` hard links (Space efficient versioning).
+- **Post-Backup Actions**: Automatically unmount devices or run custom scripts after successful backups.
 - **Decentralized Configuration**: Configuration is stored directly on the USB devices (`.usbackup.toml`), making it portable.
 - **HMAC Security**: Configurations are cryptographically signed using a local secret key to prevent unauthorized execution.
-- **Multiple Backup Formats**: Choose between standard synchronization (`rsync`), ZIP archives, or TarGz archives.
 - **Smart Auto-mount**: Automatically finds and mounts USB partitions using `udev` and `udisksctl`.
 - **Interactive Whitelisting**: When a new device is detected, the app asks whether to remember it, ignore it, or ask again later.
 - **Background Agent**: Multi-threaded architecture to keep the task responsive during backups.
@@ -26,8 +28,9 @@ USBackup uses a **Decentralized Configuration** model with a **Zero-Trust** secu
    - Each device config (`.usbackup.toml`) is signed with this secret using **HMAC-SHA256**.
    - This prevents malicious users from injecting their own configuration to steal files.
 4. **Execution**:
-   - **Mirror Mode**: Incremental synchronization using `rsync`'s delta algorithm.
-   - **Archive Mode**: Creates timestamped `.zip` or `.tar.gz` files for versioning.
+   - **Mirror Mode**: Simple one-way synchronization.
+   - **Incremental Snapshots**: Using `rsync --link-dest` to create time-stamped versions with minimal disk usage.
+   - **Post-Backup**: Automatic unmount or custom script execution.
    - **Smart Exclusions**: Automatically respects your project's `.gitignore` rules.
 
 ## �💻 Supported OS
@@ -57,8 +60,9 @@ You need `libudev` development files installed on your system:
 
 USBackup uses a decentralized configuration model. 
 
-1. **`backup_config.toml`** (Local): Stored in the application directory, it contains the list of approved UUIDs and your machine-specific **secret key** for signing.
-2. **`.usbackup.toml`** (Device): Stored on the root of your USB key. It contains the backup rules and the HMAC signature.
+1. **Local Config**: Stored in `~/.config/usbackup/backup_config.toml`, it contains the list of approved UUIDs and your machine-specific **secret key**.
+2. **Logs**: Detailed logs are kept in `~/.local/share/usbackup/logs/`.
+3. **`.usbackup.toml`** (Device): Stored on the root of your USB key. It contains the backup rules and the HMAC signature.
 
 ### Example `.usbackup.toml`:
 
@@ -74,7 +78,9 @@ action = "Whitelist"
 source_path = "/home/user/Documents"
 destination_path = "backups/docs"
 exclude = [".tmp", "cache/"]
-compression = "Zip" # Options: None, Zip, TarGz
+incremental = true           # Enable snapshots
+unmount_after = true        # Auto unmount
+post_backup_script = "notify-send 'Backup Done!'"
 ```
 
 ### Available Actions:
@@ -86,10 +92,12 @@ compression = "Zip" # Options: None, Zip, TarGz
 
 - [x] Decentralized TOML configuration.
 - [x] HMAC Signature for configuration security.
-- [x] Compression support (ZIP, TarGz).
 - [x] Automatic partition mounting.
-- [ ] Modern TUI with `ratatui`.
+- [x] Standard XDG paths for config and logs.
+- [x] Incremental snapshots (versioning).
+- [x] Post-backup actions (script/unmount).
 - [x] System notifications.
+- [ ] Multi-target backup (Remote SSH/Cloud).
 
 ## ⚖️ License
 
