@@ -12,16 +12,14 @@ pub fn load_config() -> AppConfig {
     if Path::new(CONFIG_PATH).exists() {
         match fs::read_to_string(CONFIG_PATH) {
             Ok(content) => {
-                match toml::from_str(&content) {
+                match toml::from_str::<AppConfig>(&content) {
                     Ok(mut config) => {
                         // Générer une clé secrète si elle n'existe pas
-                        if let AppConfig { secret_key, .. } = &config {
-                            if secret_key.is_empty() {
-                                let mut key = [0u8; 32];
-                                rand::rng().fill(&mut key);
-                                config.secret_key = hex::encode(key);
-                                let _ = save_config(&config);
-                            }
+                        if config.secret_key.is_empty() {
+                            let mut key = [0u8; 32];
+                            rand::rng().fill(&mut key);
+                            config.secret_key = hex::encode(key);
+                            let _ = save_config(&config);
                         }
                         config
                     }

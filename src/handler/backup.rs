@@ -275,13 +275,15 @@ async fn inner_trigger_backup(
             let mut stdout_reader = BufReader::new(stdout).lines();
             let mut stderr_reader = BufReader::new(stderr).lines();
 
-            let pb = ProgressBar::new_spinner();
+            let pb = ProgressBar::new(100);
             pb.set_style(
-                ProgressStyle::default_spinner()
-                    .template("{spinner:.green} [{elapsed_precise}] {msg}")
-                    .unwrap(),
+                ProgressStyle::with_template(
+                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg} ({pos}%)"
+                )
+                .unwrap()
+                .progress_chars("#>-"),
             );
-            pb.set_message(format!("Syncing {}...", rule.source_path));
+            pb.set_message(format!("Syncing {}", Path::new(&rule.source_path).file_name().unwrap_or_default().to_string_lossy()));
 
             let mut full_output = String::new();
             let mut error_output = String::new();
@@ -293,12 +295,14 @@ async fn inner_trigger_backup(
                             Ok(Some(l)) => {
                                 // Rsync --progress outputs lines like:
                                 //       32,768   0%    0.00kB/s    0:00:00
-                                // We try to catch the percentage if present
                                 if l.contains('%') {
                                     let parts: Vec<&str> = l.split_whitespace().collect();
                                     for part in parts {
                                         if part.contains('%') {
-                                            pb.set_message(format!("{} - {}", rule.source_path, part));
+                                            let pct_str = part.trim_end_matches('%');
+                                            if let Ok(pct) = pct_str.parse::<u64>() {
+                                                pb.set_position(pct);
+                                            }
                                         }
                                     }
                                 }
