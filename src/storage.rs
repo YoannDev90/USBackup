@@ -125,8 +125,15 @@ fn generate_default_config() -> AppConfig {
 }
 
 pub fn save_config(config: &AppConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let path = get_config_path();
     let content = toml::to_string_pretty(config)?;
-    fs::write(get_config_path(), content)?;
+    fs::write(&path, content)?;
+    // The file contains the HMAC secret key: owner-read/write only.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    }
     Ok(())
 }
 
