@@ -367,10 +367,39 @@ async fn inner_trigger_backup(
                         }
                     }
 
-                    // Post-backup script
+                    // Post-backup script: run to completion and check the exit code
                     if let Some(script) = &rule.post_backup_script {
                         info!("Running post-backup script: {}", script);
-                        let _ = TokioCommand::new("sh").arg("-c").arg(script).spawn();
+                        match TokioCommand::new("sh")
+                            .arg("-c")
+                            .arg(script)
+                            .output()
+                            .await
+                        {
+                            Ok(out) if out.status.success() => {
+                                info!(
+                                    "Post-backup script succeeded for {}",
+                                    rule.source_path
+                                );
+                            }
+                            Ok(out) => {
+                                let code = out.status.code().unwrap_or(-1);
+                                let stderr = String::from_utf8_lossy(&out.stderr);
+                                error!(
+                                    "Post-backup script failed (code {}): {} — {}",
+                                    code, script, stderr
+                                );
+                                notifications::notify_backup_error(
+                                    &device_config.name,
+                                    &format!("Post-backup script failed (code {}).", code),
+                                );
+                                has_errors = true;
+                            }
+                            Err(e) => {
+                                error!("Failed to spawn post-backup script {}: {}", script, e);
+                                has_errors = true;
+                            }
+                        }
                     }
                 }
                 Ok(s) => {
