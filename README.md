@@ -45,6 +45,27 @@ $ usbackup
 
 `udisksctl` (part of `udisks2`) is also required at runtime.
 
+### Quick install (curl)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/YoannDev90/USBackup/master/install.sh | bash
+```
+
+The script detects your OS/arch, downloads the latest release binary, verifies its SHA256 checksum, installs it to `~/.local/bin`, and offers to set up the systemd user service.
+
+<details>
+<summary>Installer options</summary>
+
+```bash
+# pass flags after `--` when piping:
+curl -fsSL ... | bash -s -- --prefix ~/.local/bin   # custom install dir
+curl -fsSL ... | bash -s -- --version 0.1.0          # pin a version
+curl -fsSL ... | bash -s -- --no-service             # skip the service prompt
+curl -fsSL ... | bash -s -- --force                  # overwrite existing binary
+```
+
+</details>
+
 ### Build from source
 
 ```bash
