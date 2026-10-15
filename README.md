@@ -81,16 +81,18 @@ systemctl --user start usbackup.service
 
 ## How it works
 
-```
-┌────────────┐   hotplug    ┌──────────┐   UUID + VID/PID   ┌────────────┐
-│  USB key   │─────────────▶│  Agent   │───────────────────▶│  Whitelist │
-└────────────┘              └──────────┘                    └─────┬──────┘
-                                                                  │ approved
-                                                                  ▼
-┌────────────┐   HMAC-SHA256 verify   ┌──────────────┐   rsync -avP   ┌─────────┐
-│ .usbackup  │◀──────────────────────│  Read config │───────────────▶│  Key    │
-│  .toml     │   (reject if invalid)  │  from mount  │  --link-dest   │  root   │
-└────────────┘                        └──────────────┘               └─────────┘
+```mermaid
+flowchart LR
+    A[🔌 USB key plugged] -->|hotplug event| B[Agent]
+    B --> C{UUID + VID/PID<br/>matched & whitelisted?}
+    C -->|No| D[Ignore / AskEachTime /<br/>queue as pending]
+    C -->|Yes| E[Mount key<br/>via udisksctl]
+    E --> F[Read .usbackup.toml]
+    F --> G{HMAC-SHA256<br/>signature valid?}
+    G -->|No| H[🚫 Security alert<br/>backup aborted]
+    G -->|Yes| I[Run rsync<br/>--link-dest / --delete]
+    I --> J[Post-backup actions<br/>script + unmount]
+    J --> K[✅ Notifications]
 ```
 
 1. **Detect** — `nusb` hotplug events, no polling.
