@@ -1,4 +1,6 @@
-use log::debug;
+use log::{debug, error, info};
+use std::fs;
+use std::path::Path;
 use tokio::process::Command as TokioCommand;
 
 pub fn find_usb_partitions() -> Vec<String> {
@@ -82,6 +84,65 @@ pub async fn mount_partition(part: &str) -> bool {
         }
         Err(e) => {
             debug!("Failed to execute udisksctl: {}", e);
+            false
+        }
+    }
+}
+
+/// Resolve the block device node backing a mount point by parsing /proc/self/mounts.
+/// `udisksctl unmount -b` expects a device node (e.g. /dev/sdb1), not a mount point.
+pub fn find_devnode_for_mount(mount_point: &Path) -> Option<String> {
+    let mounts = fs::read_to_string("/proc/self/mounts").ok()?;
+    let target = mount_point.to_string_lossy();
+    for line in mounts.lines() {
+        let mut parts = line.split_whitespace();
+        let devnode = parts.next()?;
+        let mount = parts.next()?;
+        if mount == target {
+            return Some(devnode.to_string());
+        }
+    }
+    None
+}
+
+/// Unmount a device given its mount point. Resolves the real block device
+/// first because `udisksctl unmount -b` takes a device node, not a path.
+pub async fn unmount_by_mount_point(mount_point: &Path) -> bool {
+    let devnode = match find_devnode_for_mount(mount_point) {
+        Some(d) => d,
+        None => {
+            error!(
+                "Unable to resolve a block device for mount point {:?}",
+                mount_point
+            );
+            return false;
+        }
+    };
+
+    let output = TokioCommand::new("udisksctl")
+        .arg("unmount")
+        .arg("-b")
+        .arg(&devnode)
+        .output()
+        .await;
+
+    match output {
+        Ok(out) if out.status.success() => {
+            info!("Successfully unmounted {}", devnode);
+            true
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if stderr.contains("not mounted") {
+                debug!("{} is already unmounted.", devnode);
+                true
+            } else {
+                error!("udisksctl unmount failed for {}: {}", devnode, stderr);
+                false
+            }
+        }
+        Err(e) => {
+            error!("Failed to execute udisksctl unmount for {}: {}", devnode, e);
             false
         }
     }

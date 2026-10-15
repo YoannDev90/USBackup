@@ -417,12 +417,13 @@ async fn inner_trigger_backup(
 
         if should_unmount {
             info!("Unmounting device {:?}", usb_path);
-            let _ = TokioCommand::new("udisksctl")
-                .arg("unmount")
-                .arg("-b")
-                .arg(usb_path.to_string_lossy().to_string()) // This might need dev node instead of mount point
-                .output()
-                .await;
+            if !crate::handler::udev_utils::unmount_by_mount_point(&usb_path).await {
+                error!("Failed to unmount {:?} after backup", usb_path);
+                notifications::notify_backup_error(
+                    &device_config.name,
+                    "Backup done, but unmounting the device failed.",
+                );
+            }
         }
     } else {
         warn!("Unable to locate mount point.");
