@@ -83,16 +83,16 @@ systemctl --user start usbackup.service
 
 ```mermaid
 flowchart TB
-    A([🔌 USB key plugged]) -->|hotplug| B[Agent]
+    A([USB key plugged]) -->|hotplug| B[Agent]
     B --> C{Whitelisted?}
     C -->|No| D[Ignore / Ask /<br/>pending queue]
     C -->|Yes| E[Mount via udisksctl]
     E --> F[Read .usbackup.toml]
     F --> G{HMAC valid?}
-    G -->|No| H([🚫 Security alert])
+    G -->|No| H([Security alert])
     G -->|Yes| I[rsync --link-dest / --delete]
     I --> J[Post-backup: script + unmount]
-    J --> K([✅ Notifications])
+    J --> K([Notifications])
 ```
 
 1. **Detect** — `nusb` hotplug events, no polling.
