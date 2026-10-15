@@ -226,8 +226,9 @@ async fn inner_trigger_backup(
 
             // Use rsync for efficient synchronization
             let mut cmd = TokioCommand::new("rsync");
-            // -a: archive, -v: verbose, -z: compress during transfer, -P: progress and partial
-            cmd.arg("-avzP");
+            // -a: archive, -v: verbose, -P: progress and partial.
+            // No -z: this is a local USB transfer, compression wastes CPU.
+            cmd.arg("-avP");
 
             if rule.delete_missing {
                 cmd.arg("--delete");
