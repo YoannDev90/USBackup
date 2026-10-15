@@ -20,39 +20,39 @@ pub fn get_config_path() -> PathBuf {
 
 pub fn load_config() -> AppConfig {
     let config_path = get_config_path();
-    if config_path.exists() {
-        match fs::read_to_string(&config_path) {
-            Ok(content) => {
-                match toml::from_str::<AppConfig>(&content) {
-                    Ok(mut config) => {
-                        // Générer une clé secrète si elle n'existe pas
-                        if config.secret_key.is_empty() {
-                            let mut key = [0u8; 32];
-                            rand::rng().fill(&mut key);
-                            config.secret_key = hex::encode(key);
-                            let _ = save_config(&config);
-                        }
-                        config
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "Erreur lors du parsing de {:?} : {}. Utilisation de la config par défaut.",
-                            config_path, e
-                        );
-                        generate_default_config()
-                    }
+    if !config_path.exists() {
+        return generate_default_config();
+    }
+    match fs::read_to_string(&config_path) {
+        Ok(content) => match toml::from_str::<AppConfig>(&content) {
+            Ok(mut config) => {
+                // Générer une clé secrète si elle n'existe pas
+                if config.secret_key.is_empty() {
+                    let mut key = [0u8; 32];
+                    rand::rng().fill(&mut key);
+                    config.secret_key = hex::encode(key);
+                    let _ = save_config(&config);
                 }
+                config
             }
             Err(e) => {
+                // Ne JAMAIS écraser une config corrompue : perte de la clé secrète
+                // et de tous les UUIDs approuvés, et invalidation de toutes les
+                // signatures des clés USB. On repart d'une config en mémoire.
                 eprintln!(
-                    "Erreur lors de la lecture de {:?} : {}. Utilisation de la config par défaut.",
+                    "ERROR: failed to parse {:?}: {}. Keeping the file untouched; using an in-memory default (approved devices and secret key are NOT loaded). Fix or delete the file manually.",
                     config_path, e
                 );
-                generate_default_config()
+                AppConfig::default()
             }
+        },
+        Err(e) => {
+            eprintln!(
+                "ERROR: failed to read {:?}: {}. Keeping the file untouched; using an in-memory default.",
+                config_path, e
+            );
+            AppConfig::default()
         }
-    } else {
-        generate_default_config()
     }
 }
 
