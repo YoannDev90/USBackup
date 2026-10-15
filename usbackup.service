@@ -1,12 +1,15 @@
 [Unit]
 Description=USBackup - Automatic USB Backup Service
-After=network.target
 
 [Service]
-ExecStart=%EXE_PATH%
+Type=simple
+ExecStart="%EXE_PATH%"
 Restart=always
 RestartSec=5
+TimeoutStopSec=60
 Environment=RUST_LOG=info
+SyslogIdentifier=usbackup
+NoNewPrivileges=yes
 
 [Install]
 WantedBy=default.target
