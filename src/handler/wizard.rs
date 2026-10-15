@@ -22,15 +22,15 @@ pub async fn run_wizard(
     // 1. Select the mount point of the key to find the destination
     info!("Searching for a mount point for the device (timeout 30s)...");
     let mut disks = Disks::new();
-    let mut mount_info = Vec::new();
+    // (display label, mount path) — keep the path structured so we never
+    // have to re-parse a formatted string (fragile if names contain " on ").
+    let mut mount_choices: Vec<(String, PathBuf)> = Vec::new();
 
     for i in 0..15 {
         // Attempt active mount for the partition matching our UUID + VID/PID
-        if let Some(part) = crate::handler::udev_utils::find_partition_by_uuid(
-            uuid,
-            Some(vid),
-            Some(pid),
-        ) {
+        if let Some(part) =
+            crate::handler::udev_utils::find_partition_by_uuid(uuid, Some(vid), Some(pid))
+        {
             if mount_partition(&part.devnode).await {
                 info!("Mount successful for {}", part.devnode);
             }
@@ -38,7 +38,7 @@ pub async fn run_wizard(
 
         disks.refresh(true);
 
-        mount_info = disks
+        mount_choices = disks
             .iter()
             .filter(|d| {
                 let mount = d.mount_point().to_string_lossy();
@@ -64,13 +64,14 @@ pub async fn run_wizard(
             })
             .map(|d| {
                 let name = d.name().to_string_lossy();
-                let mount = d.mount_point().to_string_lossy();
+                let mount = d.mount_point().to_path_buf();
                 let size_gb = d.total_space() / 1024 / 1024 / 1024;
-                format!("{} ({} GB) on {}", name, size_gb, mount)
+                let label = format!("{} ({} GB) on {}", name, size_gb, mount.display());
+                (label, mount)
             })
             .collect();
 
-        if !mount_info.is_empty() {
+        if !mount_choices.is_empty() {
             info!("Mount points found!");
             break;
         }
@@ -81,20 +82,19 @@ pub async fn run_wizard(
         }
     }
 
-    if mount_info.is_empty() {
+    if mount_choices.is_empty() {
         error!("No external disk (USB key) detected with UUID {}. Please make sure it is properly mounted.", uuid);
         return Ok(());
     }
 
+    let labels: Vec<&str> = mount_choices.iter().map(|(label, _)| label.as_str()).collect();
     let selection = Select::new()
         .with_prompt("Which one is your USB disk?")
-        .items(&mount_info)
+        .items(&labels)
         .default(0)
         .interact()?;
 
-    let selected_mount_info = &mount_info[selection];
-    let chosen_path = selected_mount_info.split(" on ").last().unwrap();
-    let usb_root = PathBuf::from(chosen_path);
+    let usb_root = mount_choices[selection].1.clone();
 
     // 2. Select the destination folder ON the key
     let dest_folder: String = Input::new()
