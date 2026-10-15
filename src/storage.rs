@@ -92,6 +92,10 @@ pub fn remove_pending(uuid: &str) -> bool {
 pub fn load_config() -> AppConfig {
     let config_path = get_config_path();
     if !config_path.exists() {
+        log::debug!(
+            "No config at {:?}; creating a fresh one with a new secret key",
+            config_path
+        );
         return generate_default_config();
     }
     match fs::read_to_string(&config_path) {
@@ -99,11 +103,20 @@ pub fn load_config() -> AppConfig {
             Ok(mut config) => {
                 // Generate a secret key if one does not exist yet
                 if config.secret_key.is_empty() {
+                    log::debug!("Config has empty secret_key; generating and saving one");
                     let mut key = [0u8; 32];
                     rand::rng().fill(&mut key);
                     config.secret_key = hex::encode(key);
                     let _ = save_config(&config);
                 }
+                log::debug!(
+                    "Loaded config {:?}: {} whitelist, {} ask-each-time, {} ignored, secret_key len={}",
+                    config_path,
+                    config.approved_uuids.len(),
+                    config.ask_each_time_uuids.len(),
+                    config.ignored_uuids.len(),
+                    config.secret_key.len()
+                );
                 config
             }
             Err(e) => {

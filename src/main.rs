@@ -15,15 +15,32 @@ const USAGE: &str = "\
 USBackup - automated USB backup agent
 
 Usage:
-  usbackup                      Start the background agent (daemon)
-  usbackup --help               Show this help
-  usbackup --version            Show version
-  usbackup --install-service    Install and enable the systemd user service
-  usbackup approve <uuid> [--configure]
-                                Approve a pending device; --configure also
-                                runs the interactive backup wizard
-  usbackup list-devices         List approved / ask-each-time / ignored /
-                                pending devices
+  usbackup [FLAGS] [COMMAND]
+
+Commands (default = daemon):
+  (none)                    Start the background agent
+  approve <uuid> [--configure]
+                            Approve a pending device; --configure also
+                            runs the interactive backup wizard
+  list-devices              List approved / ask-each-time / ignored /
+                            pending devices
+  --install-service         Install and enable the systemd user service
+  --help, -h                Show this help
+  --version, -V             Show version
+
+Log verbosity flags (combinable with any command):
+  (none)                    info   — normal runtime events
+  -v,  --verbose            debug  — USB scan details, rsync command
+                                   lines, mount search, config decisions
+  -vv                       trace  — everything, incl. per-line hotplug
+  -q,  --quiet              warn   — warnings and errors only
+  RUST_LOG=<filter>         overrides the flags above
+                                   (e.g. RUST_LOG=usbackup::handler=debug)
+
+Examples:
+  cargo run -- --verbose
+  usbackup approve 5E6E-... -v
+  RUST_LOG=debug usbackup
 
 In a terminal the agent prompts interactively for unknown devices.
 Under systemd (no TTY) it stores them as pending and sends a desktop
@@ -257,9 +274,19 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 let device_key = format!("{:04x}:{:04x}", vid, pid);
 
                 info!("[+] Device detected: {} ({})", product, device_key);
+                debug!(
+                    "Hotplug details: vid=0x{:04x} pid=0x{:04x} product={:?}",
+                    vid, pid, product
+                );
 
                 // Reload the approved-UUID config
                 let config = load_config();
+                debug!(
+                    "Config: {} whitelist, {} ask-each-time, {} ignored",
+                    config.approved_uuids.len(),
+                    config.ask_each_time_uuids.len(),
+                    config.ignored_uuids.len()
+                );
 
                 // Find this device's UUID, correlating by VID/PID so we never
                 // pick up a different plugged-in key.
@@ -270,14 +297,27 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     }
 
                     let parts = crate::handler::udev_utils::find_usb_partitions();
-                    debug!("Checking USB partitions: {:?}", parts);
+                    debug!(
+                        "UUID lookup attempt {}/5: {} USB partition(s) visible",
+                        i + 1,
+                        parts.len()
+                    );
 
                     for part in parts {
                         let ids_match = part.vendor_id == Some(vid) && part.product_id == Some(pid);
+                        debug!(
+                            "  candidate {} uuid={:?} vid={:04x?} pid={:04x?} vidpid_match={}",
+                            part.devnode, part.uuid, part.vendor_id, part.product_id, ids_match
+                        );
                         if ids_match {
                             if let Some(u) = part.uuid {
                                 device_uuid = Some(u);
                                 break;
+                            } else {
+                                debug!(
+                                    "  {} matches VID/PID but has no filesystem UUID yet",
+                                    part.devnode
+                                );
                             }
                         }
                     }
@@ -287,11 +327,13 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }
 
                 if let Some(uuid) = device_uuid {
+                    debug!("Resolved device UUID: {}", uuid);
                     if config.ignored_uuids.contains(&uuid) {
                         debug!("Device {} is set to IgnoreForever; skipping.", uuid);
                         continue;
                     }
                     if config.approved_uuids.contains(&uuid) {
+                        debug!("Device {} is whitelisted; starting backup task", uuid);
                         // Whitelist: run the backup automatically
                         tokio::spawn(async move {
                             // Wait for the key to mount so its local config can be read
@@ -374,10 +416,45 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
-
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match args.first().map(|s| s.as_str()) {
+
+    // Extract global verbosity flags anywhere in argv; the rest goes to
+    // the subcommand dispatcher. RUST_LOG still wins when set.
+    let mut verbosity = 0u8; // 0=info, 1=debug, 2=trace
+    let mut quiet = false;
+    let mut rest: Vec<String> = Vec::new();
+    for arg in &args {
+        match arg.as_str() {
+            "-q" | "--quiet" => quiet = true,
+            "-v" | "--verbose" => verbosity = (verbosity + 1).min(2),
+            "-vv" => verbosity = 2,
+            other => rest.push(other.to_string()),
+        }
+    }
+
+    let default_filter = if std::env::var_os("RUST_LOG").is_some() {
+        "info" // placeholder; env_logger reads RUST_LOG instead
+    } else if quiet {
+        "warn"
+    } else {
+        match verbosity {
+            0 => "info",
+            1 => "debug",
+            _ => "trace",
+        }
+    };
+    if verbosity > 0 && !quiet && std::env::var_os("RUST_LOG").is_none() {
+        eprintln!(
+            "[usbackup] verbose logging: {}",
+            match verbosity {
+                1 => "debug (-v)",
+                _ => "trace (-vv)",
+            }
+        );
+    }
+    env_logger::init_from_env(env_logger::Env::default().default_filter_or(default_filter));
+
+    match rest.first().map(|s| s.as_str()) {
         Some("--help") | Some("-h") => {
             println!("{}", USAGE);
             Ok(())
@@ -387,7 +464,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             Ok(())
         }
         Some("--install-service") => install_systemd_service(),
-        Some("approve") => cmd_approve(&args[1..]).await,
+        Some("approve") => cmd_approve(&rest[1..]).await,
         Some("list-devices") => {
             cmd_list_devices();
             Ok(())

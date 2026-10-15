@@ -36,8 +36,19 @@ pub async fn trigger_backup_by_uuid(_vid: u16, _pid: u16, uuid: &str) -> Option<
         }
 
         let usb_parts = find_usb_partitions();
+        debug!(
+            "Mount search attempt {}/30 for uuid {}: {} USB partition(s)",
+            attempts + 1,
+            uuid,
+            usb_parts.len()
+        );
         for part in usb_parts {
+            debug!(
+                "  {} uuid={:?} vid={:04x?} pid={:04x?}",
+                part.devnode, part.uuid, part.vendor_id, part.product_id
+            );
             if part.uuid.as_deref() == Some(uuid) {
+                debug!("Partition {} matches; attempting udisksctl mount", part.devnode);
                 if mount_partition(&part.devnode).await {
                     // Success
                 }
@@ -63,6 +74,7 @@ pub async fn trigger_backup_by_uuid(_vid: u16, _pid: u16, uuid: &str) -> Option<
                     let disk_devnode = format!("/dev/{}", d.name().to_string_lossy());
                     disk_devnode == part.devnode
                 }) {
+                    debug!("Found mount point: {:?}", d.mount_point());
                     found_mount_point = Some(d.mount_point().to_path_buf());
                     break;
                 }
@@ -74,6 +86,12 @@ pub async fn trigger_backup_by_uuid(_vid: u16, _pid: u16, uuid: &str) -> Option<
     if let Some(mount_point) = found_mount_point {
         if let Some(conf) = crate::storage::load_device_config(&mount_point) {
             let main_config = crate::storage::load_config();
+            debug!(
+                "Loaded .usbackup.toml: name={:?} rules={} signature={:.16}…",
+                conf.name,
+                conf.backup_rules.len(),
+                conf.signature.as_deref().unwrap_or("<none>")
+            );
             if crate::storage::verify_signature(&conf, &main_config.secret_key) {
                 info!("Local config loaded and verified from {:?}", mount_point);
                 inner_trigger_backup(&conf, Some(mount_point)).await;
@@ -102,6 +120,20 @@ async fn inner_trigger_backup(
     pre_found_mount: Option<std::path::PathBuf>,
 ) {
     info!("Preparing backup for {}", device_config.name);
+
+    if device_config.backup_rules.is_empty() {
+        warn!(
+            "Device '{}' has ZERO backup rules — nothing will be synced. \
+             Re-run the wizard and select at least one source folder.",
+            device_config.name
+        );
+    } else {
+        debug!(
+            "Device '{}' has {} backup rule(s)",
+            device_config.name,
+            device_config.backup_rules.len()
+        );
+    }
 
     // Disk detection via sysinfo (Cross-platform) with retries
     let mut found_mount_point = pre_found_mount;
@@ -209,6 +241,14 @@ async fn inner_trigger_backup(
             let full_dest = usb_path.join(sanitized_dest);
 
             info!("Syncing {} to {:?}", rule.source_path, full_dest);
+            debug!(
+                "Rule options: delete_missing={} incremental={} unmount_after={} excludes={} post_script={:?}",
+                rule.delete_missing,
+                rule.incremental,
+                rule.unmount_after,
+                rule.exclude.len(),
+                rule.post_backup_script.as_deref().unwrap_or("<none>")
+            );
 
             // Check if source exists
             if !Path::new(&rule.source_path).exists() {
@@ -258,7 +298,10 @@ async fn inner_trigger_backup(
                 let latest_link = full_dest.join("latest");
 
                 if latest_link.exists() {
+                    debug!("link-dest: reusing hard links from {:?}", latest_link);
                     cmd.arg(format!("--link-dest={}", latest_link.to_string_lossy()));
+                } else {
+                    debug!("No 'latest' link yet; first snapshot for {:?}", full_dest);
                 }
 
                 if let Err(e) = std::fs::create_dir_all(&snapshot_path) {
@@ -277,6 +320,8 @@ async fn inner_trigger_backup(
             cmd.arg(&rule.source_path).arg(&final_dest);
             cmd.stdout(std::process::Stdio::piped());
             cmd.stderr(std::process::Stdio::piped());
+
+            debug!("Spawning: {:?}", cmd);
 
             let mut child = match cmd.spawn() {
                 Ok(c) => c,
@@ -350,6 +395,10 @@ async fn inner_trigger_backup(
             match status {
                 Ok(s) if s.success() => {
                     info!("Success for {}", rule.source_path);
+                    debug!(
+                        "rsync exit 0; captured {} bytes of stdout for the device log",
+                        full_output.len()
+                    );
                     append_to_log(&device_config.name, &rule.source_path, &full_output);
 
                     // Update 'latest' symlink for incremental backups

@@ -83,7 +83,16 @@ pub fn find_usb_partitions() -> Vec<UsbPartition> {
                     vendor_id,
                     product_id,
                 };
-                debug!("USB partition found via udev: {:?}", part);
+                debug!(
+                    "udev: {} bus=usb uuid={:?} id_vendor={:04x?} id_model={:04x?} fs_type={:?}",
+                    part.devnode,
+                    part.uuid,
+                    part.vendor_id,
+                    part.product_id,
+                    device
+                        .property_value("ID_FS_TYPE")
+                        .map(|v| v.to_string_lossy().to_string())
+                );
                 partitions.push(part);
             }
         }

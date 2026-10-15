@@ -100,6 +100,15 @@ usbackup approve <uuid> --configure   # approve and run the wizard
 usbackup list-devices            # list whitelist / ask-each-time / ignored / pending
 ```
 
+### Verbose logging
+
+```bash
+cargo run -- -v     # debug: USB scan, rsync command lines, mount search
+cargo run -- -vv    # trace: everything
+cargo run -- -q     # warnings/errors only
+RUST_LOG=debug usbackup   # same as -v; RUST_LOG wins if set
+```
+
 When the agent runs **without a TTY** (e.g. under systemd), unknown devices
 are recorded as *pending* and a desktop notification tells you to run
 `usbackup approve <uuid>` from a terminal.

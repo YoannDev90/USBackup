@@ -95,6 +95,15 @@ usbackup approve <uuid> --configure   # approuver et lancer l'assistant
 usbackup list-devices            # lister whitelist / ask-each-time / ignorés / en attente
 ```
 
+### Logs verbeux
+
+```bash
+cargo run -- -v     # debug : scan USB, commandes rsync, recherche de montage
+cargo run -- -vv    # trace : tout
+cargo run -- -q     # alertes/erreurs uniquement
+RUST_LOG=debug usbackup   # équivalent à -v ; RUST_LOG a priorité
+```
+
 Quand l'agent tourne **sans TTY** (ex. sous systemd), les appareils inconnus
 sont enregistrés comme *en attente* et une notification demande de lancer
 `usbackup approve <uuid>` depuis un terminal.
