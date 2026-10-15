@@ -137,10 +137,46 @@ pub fn save_config(config: &AppConfig) -> Result<(), Box<dyn std::error::Error +
     Ok(())
 }
 
+/// Deterministic byte representation of a DeviceConfig used as HMAC input.
+///
+/// Deliberately NOT `toml::to_string`: the toml crate's output (key order,
+/// spacing, number formatting) is not a stability guarantee across versions.
+/// A toml upgrade could therefore invalidate every signature on every USB
+/// key. This function owns the format: fixed field order, one `key=value`
+/// per line, rules separated by a record separator.
+pub fn canonical_form(config: &DeviceConfig) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("name={}\n", config.name));
+    out.push_str(&format!("vendor_id={}\n", config.vendor_id));
+    out.push_str(&format!("product_id={}\n", config.product_id));
+    out.push_str(&format!(
+        "uuid={}\n",
+        config.uuid.as_deref().unwrap_or("")
+    ));
+    out.push_str(&format!("action={:?}\n", config.action));
+    for rule in &config.backup_rules {
+        out.push_str("rule\n");
+        out.push_str(&format!("source_path={}\n", rule.source_path));
+        out.push_str(&format!("destination_path={}\n", rule.destination_path));
+        // U+001F unit separator: cannot appear in gitignore patterns from
+        // the bundled list in any meaningful way, keeps joins unambiguous.
+        out.push_str(&format!("exclude={}\n", rule.exclude.join("\u{1f}")));
+        out.push_str(&format!("delete_missing={}\n", rule.delete_missing));
+        out.push_str(&format!("incremental={}\n", rule.incremental));
+        out.push_str(&format!("unmount_after={}\n", rule.unmount_after));
+        out.push_str(&format!(
+            "post_backup_script={}\n",
+            rule.post_backup_script.as_deref().unwrap_or("")
+        ));
+        out.push_str("endrule\n");
+    }
+    out
+}
+
 pub fn sign_config(config: &mut DeviceConfig, secret_key: &str) {
     let mut config_for_signing = config.clone();
-    config_for_signing.signature = None; // Ne pas signer la signature elle-même
-    let serialized = toml::to_string(&config_for_signing).unwrap_or_default();
+    config_for_signing.signature = None; // Never sign the signature itself
+    let serialized = canonical_form(&config_for_signing);
 
     type HmacSha256 = Hmac<Sha256>;
     let mut mac =
@@ -158,7 +194,7 @@ pub fn verify_signature(config: &DeviceConfig, secret_key: &str) -> bool {
 
     let mut config_for_signing = config.clone();
     config_for_signing.signature = None;
-    let serialized = toml::to_string(&config_for_signing).unwrap_or_default();
+    let serialized = canonical_form(&config_for_signing);
 
     type HmacSha256 = Hmac<Sha256>;
     let mut mac =
