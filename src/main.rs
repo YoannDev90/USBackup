@@ -28,10 +28,23 @@ Usage:
 In a terminal the agent prompts interactively for unknown devices.
 Under systemd (no TTY) it stores them as pending and sends a desktop
 notification; approve them with `usbackup approve <uuid>`.";
+/// Check that a command exists in $PATH without shelling out to `which`
+/// (which is not present on minimal systems).
+fn command_in_path(cmd: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths).any(|dir| {
+                let candidate = dir.join(cmd);
+                candidate.is_file()
+            })
+        })
+        .unwrap_or(false)
+}
+
 fn check_dependencies() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let deps = ["rsync", "udisksctl"];
     for dep in deps {
-        if !Command::new("which").arg(dep).output()?.status.success() {
+        if !command_in_path(dep) {
             error!("Missing dependency: {}", dep);
             return Err(format!("The tool '{}' is required but is not installed.", dep).into());
         }
