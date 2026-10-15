@@ -167,17 +167,9 @@ async fn handle_new_device_interactive(
                 }
             }
 
-            let product = product.to_string();
-            let uuid = uuid.to_string();
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            rt.block_on(async {
-                if let Err(e) = handler::run_wizard(vid, pid, &product, &uuid).await {
-                    error!("Wizard error: {}", e);
-                }
-            });
+            if let Err(e) = handler::run_wizard(vid, pid, product, uuid).await {
+                error!("Wizard error: {}", e);
+            }
         }
         1 => {
             if !config.ask_each_time_uuids.contains(&uuid.to_string()) {
@@ -336,17 +328,14 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         // New device with a TTY: interactive Select menu
                         let product_clone = product.clone();
                         let uuid_clone = uuid.clone();
-                        tokio::task::spawn_blocking(move || {
-                            let rt = tokio::runtime::Builder::new_current_thread()
-                                .enable_all()
-                                .build()
-                                .unwrap();
-                            rt.block_on(handle_new_device_interactive(
+                        tokio::spawn(async move {
+                            handle_new_device_interactive(
                                 vid,
                                 pid,
                                 &product_clone,
                                 &uuid_clone,
-                            ));
+                            )
+                            .await;
                         });
                     } else {
                         // New device without a TTY: record as pending + notify
