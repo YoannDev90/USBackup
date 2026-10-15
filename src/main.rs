@@ -4,6 +4,7 @@ mod handler;
 mod models;
 mod notifications;
 mod storage;
+mod tui_lock;
 
 use crate::storage::{load_config, PendingDevice};
 use log::{debug, error, info, warn};
@@ -120,6 +121,7 @@ async fn cmd_approve(
     if configure {
         match device {
             Some(dev) => {
+                let _guard = tui_lock::lock().await;
                 println!("Running configuration wizard for \"{}\"...", dev.product);
                 handler::run_wizard(dev.vendor_id, dev.product_id, &dev.product, uuid).await?;
             }
@@ -141,6 +143,7 @@ async fn handle_new_device_interactive(
     product: &str,
     uuid: &str,
 ) {
+    let _guard = tui_lock::lock().await;
     let options = [
         "Approve and configure backups (Whitelist)",
         "Approve, but ask every time (AskEachTime)",
@@ -290,6 +293,8 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         if std::io::stdin().is_terminal() {
                             let product_clone = product.clone();
                             tokio::task::spawn_blocking(move || {
+                                let _guard = tokio::runtime::Handle::current()
+                                    .block_on(tui_lock::lock());
                                 let run_now = dialoguer::Confirm::new()
                                     .with_prompt(format!(
                                         "Device '{}' ({}) is set to AskEachTime. Run a backup now?",
