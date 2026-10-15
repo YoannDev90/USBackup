@@ -463,8 +463,20 @@ fn get_log_path(device_name: &str) -> PathBuf {
     PathBuf::from(format!("{}.log", device_name.replace(' ', "_")))
 }
 
+/// Maximum size of a per-device log file before it is rotated to `.1`.
+const MAX_LOG_SIZE: u64 = 10 * 1024 * 1024;
+
 fn append_to_log(device_name: &str, source: &str, content: &str) {
     let log_file = get_log_path(device_name);
+
+    // Simple single-file rotation: keep one previous generation.
+    if let Ok(meta) = std::fs::metadata(&log_file) {
+        if meta.len() > MAX_LOG_SIZE {
+            let rotated = log_file.with_extension("log.1");
+            let _ = std::fs::rename(&log_file, &rotated);
+        }
+    }
+
     let mut file = match OpenOptions::new().create(true).append(true).open(&log_file) {
         Ok(f) => f,
         Err(e) => {
