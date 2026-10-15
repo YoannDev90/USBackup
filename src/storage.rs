@@ -37,6 +37,14 @@ fn pending_path() -> PathBuf {
     get_config_dir().join("pending_devices.toml")
 }
 
+/// TOML has no top-level array value; wrap the list so `[[pending]]`
+/// table-array syntax is used on disk.
+#[derive(Serialize, Deserialize)]
+struct PendingFile {
+    #[serde(default)]
+    pending: Vec<PendingDevice>,
+}
+
 pub fn load_pending() -> Vec<PendingDevice> {
     let path = pending_path();
     if !path.exists() {
@@ -44,13 +52,17 @@ pub fn load_pending() -> Vec<PendingDevice> {
     }
     fs::read_to_string(&path)
         .ok()
-        .and_then(|c| toml::from_str(&c).ok())
+        .and_then(|c| toml::from_str::<PendingFile>(&c).ok())
+        .map(|f| f.pending)
         .unwrap_or_default()
 }
 
 pub fn save_pending(list: &[PendingDevice]) {
     let path = pending_path();
-    if let Ok(content) = toml::to_string_pretty(list) {
+    let file = PendingFile {
+        pending: list.to_vec(),
+    };
+    if let Ok(content) = toml::to_string_pretty(&file) {
         let _ = fs::write(path, content);
     }
 }
@@ -229,4 +241,126 @@ pub fn save_device_config(
     let content = toml::to_string_pretty(config)?;
     fs::write(config_path, content)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::device::{BackupRule, DeviceAction, DeviceConfig};
+
+    fn sample_config() -> DeviceConfig {
+        DeviceConfig {
+            name: "Test Key".into(),
+            vendor_id: 0x0951,
+            product_id: 0x1666,
+            uuid: Some("ABCD-1234".into()),
+            signature: None,
+            action: DeviceAction::Whitelist,
+            backup_rules: vec![BackupRule {
+                source_path: "/home/user/Documents".into(),
+                destination_path: "backups/docs".into(),
+                exclude: vec!["*.tmp".into(), "cache/".into()],
+                delete_missing: true,
+                incremental: true,
+                post_backup_script: Some("notify-send done".into()),
+                unmount_after: true,
+            }],
+        }
+    }
+
+    #[test]
+    fn sign_then_verify_roundtrip() {
+        let mut config = sample_config();
+        sign_config(&mut config, "test-secret");
+        assert!(config.signature.is_some());
+        assert!(verify_signature(&config, "test-secret"));
+    }
+
+    #[test]
+    fn verify_fails_with_wrong_key() {
+        let mut config = sample_config();
+        sign_config(&mut config, "test-secret");
+        assert!(!verify_signature(&config, "other-secret"));
+    }
+
+    #[test]
+    fn verify_fails_when_payload_tampered() {
+        let mut config = sample_config();
+        sign_config(&mut config, "test-secret");
+        config.name = "Evil Key".into();
+        assert!(!verify_signature(&config, "test-secret"));
+    }
+
+    #[test]
+    fn verify_fails_when_rule_tampered() {
+        let mut config = sample_config();
+        sign_config(&mut config, "test-secret");
+        config.backup_rules[0].source_path = "/etc".into();
+        assert!(!verify_signature(&config, "test-secret"));
+    }
+
+    #[test]
+    fn verify_fails_on_missing_or_invalid_signature() {
+        let config = sample_config();
+        assert!(!verify_signature(&config, "test-secret"));
+
+        let mut bad = sample_config();
+        bad.signature = Some("not-hex-zz".into());
+        assert!(!verify_signature(&bad, "test-secret"));
+    }
+
+    #[test]
+    fn verify_fails_on_wrong_length_signature() {
+        let mut config = sample_config();
+        sign_config(&mut config, "test-secret");
+        // Truncate the signature
+        let sig = config.signature.take().unwrap();
+        config.signature = Some(sig[..10].to_string());
+        assert!(!verify_signature(&config, "test-secret"));
+    }
+
+    #[test]
+    fn canonical_form_is_stable_and_field_ordered() {
+        let a = canonical_form(&sample_config());
+        let b = canonical_form(&sample_config());
+        assert_eq!(a, b);
+        // Fixed order: name first, then vendor_id
+        let name_pos = a.find("name=").unwrap();
+        let vendor_pos = a.find("vendor_id=").unwrap();
+        assert!(name_pos < vendor_pos);
+        assert!(a.contains("rule\n"));
+        assert!(a.contains("endrule\n"));
+    }
+
+    #[test]
+    fn canonical_form_reflects_signature_exclusion() {
+        // Signing input must ignore the signature field itself
+        let mut signed = sample_config();
+        sign_config(&mut signed, "k");
+        let with_sig = canonical_form(&signed);
+        let mut unsigned = signed.clone();
+        unsigned.signature = None;
+        assert_eq!(with_sig, canonical_form(&unsigned));
+    }
+
+    #[test]
+    fn pending_roundtrip_helpers() {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct Wrapper {
+            pending: Vec<PendingDevice>,
+        }
+        let p = PendingDevice {
+            uuid: "X".into(),
+            vendor_id: 1,
+            product_id: 2,
+            product: "p".into(),
+        };
+        let s = toml::to_string(&Wrapper {
+            pending: vec![p],
+        })
+        .unwrap();
+        let back: Wrapper = toml::from_str(&s).unwrap();
+        assert_eq!(back.pending[0].uuid, "X");
+        assert_eq!(back.pending[0].vendor_id, 1);
+    }
 }

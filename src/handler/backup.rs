@@ -205,10 +205,7 @@ async fn inner_trigger_backup(
                 );
             }
 
-            let sanitized_dest = rule
-                .destination_path
-                .trim_start_matches('/')
-                .replace("..", "__"); // Protection basique contre le path traversal
+            let sanitized_dest = sanitize_dest(&rule.destination_path);
 
             let full_dest = usb_path.join(sanitized_dest);
 
@@ -504,4 +501,34 @@ fn find_local_gitignore(source_path: &str) -> Result<std::path::PathBuf, std::io
         std::io::ErrorKind::NotFound,
         "No .gitignore found",
     ))
+}
+
+/// Sanitize a backup destination so it always stays under the USB root.
+/// Strips leading slashes and neutralizes `..` traversal segments.
+fn sanitize_dest(destination_path: &str) -> String {
+    destination_path.trim_start_matches('/').replace("..", "__")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_dest;
+
+    #[test]
+    fn sanitize_strips_leading_slashes() {
+        assert_eq!(sanitize_dest("/backups/docs"), "backups/docs");
+        assert_eq!(sanitize_dest("//a/b"), "a/b");
+    }
+
+    #[test]
+    fn sanitize_neutralizes_parent_traversal() {
+        assert_eq!(sanitize_dest("../etc"), "__/etc");
+        assert_eq!(sanitize_dest("backups/../../etc"), "backups/__/__/etc");
+        assert_eq!(sanitize_dest(".."), "__");
+    }
+
+    #[test]
+    fn sanitize_keeps_relative_paths() {
+        assert_eq!(sanitize_dest("backups/my_pc"), "backups/my_pc");
+        assert_eq!(sanitize_dest("a..b"), "a__b"); // even mid-name, conservative
+    }
 }
