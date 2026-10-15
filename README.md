@@ -88,6 +88,22 @@ post_backup_script = "notify-send 'Backup Done!'"
 - `IgnoreForever`: Stops asking and ignores the device.
 - `AskEachTime`: Prompts for action every time the device is plugged in.
 
+## 🖥️ CLI
+
+```bash
+usbackup                         # start the background agent
+usbackup --help                  # show usage
+usbackup --version               # show version
+usbackup --install-service       # install + enable the systemd user service
+usbackup approve <uuid>          # approve a device detected without a TTY
+usbackup approve <uuid> --configure   # approve and run the wizard
+usbackup list-devices            # list whitelist / ask-each-time / ignored / pending
+```
+
+When the agent runs **without a TTY** (e.g. under systemd), unknown devices
+are recorded as *pending* and a desktop notification tells you to run
+`usbackup approve <uuid>` from a terminal.
+
 ## 🚀 Roadmap
 
 - [x] Decentralized TOML configuration.

@@ -83,6 +83,22 @@ post_backup_script = "notify-send 'Backup terminée !'"
 - `IgnoreForever` : Ne pose plus de questions et ignore l'appareil.
 - `AskEachTime` : Redemande l'action à chaque branchement.
 
+## 🖥️ CLI
+
+```bash
+usbackup                         # démarrer l'agent en arrière-plan
+usbackup --help                  # afficher l'aide
+usbackup --version               # afficher la version
+usbackup --install-service       # installer/activer le service systemd utilisateur
+usbackup approve <uuid>          # approuver un appareil détecté sans TTY
+usbackup approve <uuid> --configure   # approuver et lancer l'assistant
+usbackup list-devices            # lister whitelist / ask-each-time / ignorés / en attente
+```
+
+Quand l'agent tourne **sans TTY** (ex. sous systemd), les appareils inconnus
+sont enregistrés comme *en attente* et une notification demande de lancer
+`usbackup approve <uuid>` depuis un terminal.
+
 ## 🚀 Prochaines étapes
 
 - [x] Configuration décentralisée TOML.

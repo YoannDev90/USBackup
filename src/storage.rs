@@ -3,19 +3,78 @@ use crate::models::device::DeviceConfig;
 use directories::ProjectDirs;
 use hmac::{Hmac, KeyInit, Mac};
 use rand::RngExt;
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub fn get_config_path() -> PathBuf {
+/// A device seen by the daemon without an interactive TTY. Stored so the
+/// user can later run `usbackup approve <uuid>` from a terminal.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PendingDevice {
+    pub uuid: String,
+    pub vendor_id: u16,
+    pub product_id: u16,
+    pub product: String,
+}
+
+pub fn get_config_dir() -> PathBuf {
     if let Some(proj_dirs) = ProjectDirs::from("com", "usbackup", "USBackup") {
         let config_dir = proj_dirs.config_dir();
         if !config_dir.exists() {
             let _ = fs::create_dir_all(config_dir);
         }
-        return config_dir.join("backup_config.toml");
+        return config_dir.to_path_buf();
     }
-    PathBuf::from("backup_config.toml")
+    PathBuf::from(".")
+}
+
+pub fn get_config_path() -> PathBuf {
+    get_config_dir().join("backup_config.toml")
+}
+
+fn pending_path() -> PathBuf {
+    get_config_dir().join("pending_devices.toml")
+}
+
+pub fn load_pending() -> Vec<PendingDevice> {
+    let path = pending_path();
+    if !path.exists() {
+        return Vec::new();
+    }
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|c| toml::from_str(&c).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_pending(list: &[PendingDevice]) {
+    let path = pending_path();
+    if let Ok(content) = toml::to_string_pretty(list) {
+        let _ = fs::write(path, content);
+    }
+}
+
+/// Add a device to the pending list (deduplicated by uuid).
+pub fn add_pending(device: PendingDevice) {
+    let mut list = load_pending();
+    if !list.iter().any(|p| p.uuid == device.uuid) {
+        list.push(device);
+        save_pending(&list);
+    }
+}
+
+/// Remove a uuid from the pending list. Returns true if it was present.
+pub fn remove_pending(uuid: &str) -> bool {
+    let mut list = load_pending();
+    let before = list.len();
+    list.retain(|p| p.uuid != uuid);
+    if list.len() != before {
+        save_pending(&list);
+        true
+    } else {
+        false
+    }
 }
 
 pub fn load_config() -> AppConfig {
