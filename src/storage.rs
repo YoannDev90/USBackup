@@ -165,8 +165,12 @@ pub fn verify_signature(config: &DeviceConfig, secret_key: &str) -> bool {
         HmacSha256::new_from_slice(secret_key.as_bytes()).expect("HMAC can take key of any size");
     mac.update(serialized.as_bytes());
 
-    let expected_signature = hex::encode(mac.finalize().into_bytes());
-    expected_signature == *signature_to_check
+    // Constant-time comparison via the hmac crate (rejects on any mismatch).
+    let sig_bytes = match hex::decode(signature_to_check) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    mac.verify_slice(&sig_bytes).is_ok()
 }
 
 pub fn load_device_config(mount_point: &Path) -> Option<DeviceConfig> {
