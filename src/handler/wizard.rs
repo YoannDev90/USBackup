@@ -249,7 +249,7 @@ pub async fn run_wizard(
         backup_rules: rules,
     };
 
-    // Signer la configuration avec la clé secrète locale
+    // Sign the configuration with the local secret key
     let config_main = crate::storage::load_config();
     crate::storage::sign_config(&mut new_device, &config_main.secret_key);
 

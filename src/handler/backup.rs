@@ -12,8 +12,8 @@ use sysinfo::Disks;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 
-// Laisse cette fonction publique si tu prévois de l'appeler ailleurs,
-// sinon on peut la marquer comme autorisée ou la supprimer.
+// Keep this public if you plan to call it elsewhere,
+// otherwise mark it allowed or remove it.
 #[allow(dead_code)]
 pub async fn trigger_backup(device_config: &DeviceConfig) {
     inner_trigger_backup(device_config, None).await;
@@ -25,9 +25,8 @@ pub async fn trigger_backup_by_uuid(_vid: u16, _pid: u16, uuid: &str) -> Option<
         uuid
     );
 
-    // Heureusement, la boucle de détection dans inner_trigger_backup gère déjà l'attente
-    // Mais ici on n'a pas encore la DeviceConfig.
-    // On va faire une boucle d'attente simplifiée ici pour trouver le point de montage
+    // The detection loop in inner_trigger_backup already handles waiting,
+    // but we still need a simplified wait here to find the mount point
 
     let mut found_mount_point = None;
     let mut attempts = 0;
@@ -83,17 +82,17 @@ pub async fn trigger_backup_by_uuid(_vid: u16, _pid: u16, uuid: &str) -> Option<
                 error!("SECURITY ALERT: Invalid signature for local config on {:?}. The config may have been tampered with or created on another machine.", mount_point);
                 notifications::notify_backup_error(
                     &conf.name,
-                    "Signature de configuration invalide ! Backup annulée par sécurité.",
+                    "Invalid configuration signature! Backup cancelled for safety.",
                 );
             }
         } else {
             error!(
-                "Appareil approuvé mais aucun fichier .usbackup.toml trouvé sur {:?}",
+                "Device approved but no .usbackup.toml found on {:?}",
                 mount_point
             );
         }
     } else {
-        error!("Impossible de monter l'appareil {} après 30s.", uuid);
+        error!("Unable to mount device {} after 30s.", uuid);
     }
     None
 }
@@ -197,7 +196,7 @@ async fn inner_trigger_backup(
 
         let mut has_errors = false;
         for rule in &device_config.backup_rules {
-            // Sécurité : Empêcher l'utilisation de chemins absolus ou de traversal pour la destination
+            // Safety: prevent absolute paths or traversal in the destination
             if rule.destination_path.starts_with('/') {
                 warn!(
                     "Destination path '{}' is absolute. Forcing relative to USB root.",
@@ -404,7 +403,7 @@ async fn inner_trigger_backup(
                     error!("Rsync failed with code {} for {}", code, rule.source_path);
                     notifications::notify_backup_error(
                         &device_config.name,
-                        &format!("Erreur rsync (code {}). Consultez les logs.", code),
+                        &format!("rsync error (code {}). Check the logs.", code),
                     );
                     append_to_log(
                         &device_config.name,
@@ -423,7 +422,7 @@ async fn inner_trigger_backup(
         if has_errors {
             notifications::notify_backup_error(
                 &device_config.name,
-                "Certaines synchronisations ont échoué. Vérifiez les logs.",
+                "Some syncs failed. Check the logs.",
             );
         } else {
             notifications::notify_backup_success(&device_config.name);
@@ -446,7 +445,7 @@ async fn inner_trigger_backup(
         warn!("Unable to locate mount point.");
         notifications::notify_backup_error(
             &device_config.name,
-            "Impossible de localiser le point de montage du disque.",
+            "Unable to locate the disk mount point.",
         );
         return;
     }

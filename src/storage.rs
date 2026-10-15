@@ -97,7 +97,7 @@ pub fn load_config() -> AppConfig {
     match fs::read_to_string(&config_path) {
         Ok(content) => match toml::from_str::<AppConfig>(&content) {
             Ok(mut config) => {
-                // Générer une clé secrète si elle n'existe pas
+                // Generate a secret key if one does not exist yet
                 if config.secret_key.is_empty() {
                     let mut key = [0u8; 32];
                     rand::rng().fill(&mut key);
@@ -107,9 +107,9 @@ pub fn load_config() -> AppConfig {
                 config
             }
             Err(e) => {
-                // Ne JAMAIS écraser une config corrompue : perte de la clé secrète
-                // et de tous les UUIDs approuvés, et invalidation de toutes les
-                // signatures des clés USB. On repart d'une config en mémoire.
+                // NEVER overwrite a corrupt config: that would lose the secret key
+                // and every approved UUID, and invalidate every signature on
+                // USB keys. Fall back to an in-memory default instead.
                 eprintln!(
                     "ERROR: failed to parse {:?}: {}. Keeping the file untouched; using an in-memory default (approved devices and secret key are NOT loaded). Fix or delete the file manually.",
                     config_path, e
