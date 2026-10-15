@@ -38,36 +38,34 @@ pub async fn trigger_backup_by_uuid(_vid: u16, _pid: u16, uuid: &str) -> Option<
 
         let usb_parts = find_usb_partitions();
         for part in usb_parts {
-            if let Some(u) = crate::handler::udev_utils::get_partition_uuid(&part) {
-                if u == uuid {
-                    if mount_partition(&part).await {
-                        // Succès
+            if part.uuid.as_deref() == Some(uuid) {
+                if mount_partition(&part.devnode).await {
+                    // Success
+                }
+                // Locate where it is mounted
+                let disks = Disks::new_with_refreshed_list();
+                if let Some(d) = disks.iter().find(|d| {
+                    let mount = d.mount_point().to_string_lossy();
+                    // Strict filter: ignore system and home partitions
+                    if mount == "/"
+                        || mount.starts_with("/boot")
+                        || mount.starts_with("/home")
+                        || mount.starts_with("/run/user")
+                    {
+                        return false;
                     }
-                    // Trouver où c'est monté
-                    let disks = Disks::new_with_refreshed_list();
-                    if let Some(d) = disks.iter().find(|d| {
-                        let mount = d.mount_point().to_string_lossy();
-                        // Filtrage strict : ignorer les partitions système et home
-                        if mount == "/"
-                            || mount.starts_with("/boot")
-                            || mount.starts_with("/home")
-                            || mount.starts_with("/run/user")
-                        {
-                            return false;
-                        }
 
-                        // Si c'est monté dans /run/media ou /media, c'est probablement notre clé
-                        if mount.starts_with("/run/media/") || mount.starts_with("/media/") {
-                            return true;
-                        }
-
-                        // Sinon, on vérifie l'UUID
-                        crate::handler::udev_utils::get_partition_uuid(&part).as_deref()
-                            == Some(uuid)
-                    }) {
-                        found_mount_point = Some(d.mount_point().to_path_buf());
-                        break;
+                    // Mounted under /run/media or /media: almost certainly our key
+                    if mount.starts_with("/run/media/") || mount.starts_with("/media/") {
+                        return true;
                     }
+
+                    // Otherwise verify the backing device node matches our partition
+                    let disk_devnode = format!("/dev/{}", d.name().to_string_lossy());
+                    disk_devnode == part.devnode
+                }) {
+                    found_mount_point = Some(d.mount_point().to_path_buf());
+                    break;
                 }
             }
         }
@@ -120,8 +118,8 @@ async fn inner_trigger_backup(
             // ATTEMPT MOUNT ON EVERY TRY if not mounted
             let usb_parts = find_usb_partitions();
             for part in usb_parts {
-                if mount_partition(&part).await {
-                    info!("Mount successful for {}", part);
+                if mount_partition(&part.devnode).await {
+                    info!("Mount successful for {}", part.devnode);
                 }
             }
 
@@ -157,20 +155,13 @@ async fn inner_trigger_backup(
 
                 // Try matching by UUID if available
                 if let Some(conf_uuid) = &device_config.uuid {
-                    // We need to find the devnode for this disk to get its UUID
-                    // sysinfo doesn't give us the UUID directly easily,
-                    // so we check partitions found by udev
-                    let usb_parts = find_usb_partitions();
-                    for part in usb_parts {
-                        if let Some(u) = crate::handler::udev_utils::get_partition_uuid(&part) {
-                            if u == *conf_uuid {
-                                // Verify this partition is indeed mounted at mount_point
-                                if disk.mount_point().to_string_lossy() == mount_point {
-                                    matches = true;
-                                    break;
-                                }
-                            }
-                        }
+                    // A sysinfo disk matches if its backing devnode is the USB
+                    // partition with our UUID (correlates disk -> udev partition).
+                    let disk_devnode = format!("/dev/{}", name);
+                    if find_usb_partitions().iter().any(|p| {
+                        p.uuid.as_deref() == Some(conf_uuid.as_str()) && p.devnode == disk_devnode
+                    }) {
+                        matches = true;
                     }
                 }
 

@@ -3,7 +3,49 @@ use std::fs;
 use std::path::Path;
 use tokio::process::Command as TokioCommand;
 
-pub fn find_usb_partitions() -> Vec<String> {
+/// A USB block partition with the metadata needed to correlate it to a
+/// hotplug event (vendor_id/product_id) and to a backup config (uuid).
+#[derive(Debug, Clone)]
+pub struct UsbPartition {
+    pub devnode: String,
+    pub uuid: Option<String>,
+    pub vendor_id: Option<u16>,
+    pub product_id: Option<u16>,
+}
+
+fn parse_hex_u16(s: &str) -> Option<u16> {
+    u16::from_str_radix(s.trim(), 16).ok()
+}
+
+/// Extract VID/PID for a partition: prefer ID_VENDOR_ID/ID_MODEL_ID
+/// properties, fall back to walking up to the USB parent device's
+/// idVendor/idProduct sysfs attributes.
+fn usb_ids_for_partition(device: &udev::Device) -> (Option<u16>, Option<u16>) {
+    let vid = device
+        .property_value("ID_VENDOR_ID")
+        .and_then(|v| parse_hex_u16(&v.to_string_lossy()));
+    let pid = device
+        .property_value("ID_MODEL_ID")
+        .and_then(|v| parse_hex_u16(&v.to_string_lossy()));
+    if vid.is_some() && pid.is_some() {
+        return (vid, pid);
+    }
+
+    let mut current = device.parent();
+    while let Some(parent) = current {
+        if let Some(v) = parent.attribute_value("idVendor") {
+            let vid = parse_hex_u16(&v.to_string_lossy());
+            let pid = parent
+                .attribute_value("idProduct")
+                .and_then(|p| parse_hex_u16(&p.to_string_lossy()));
+            return (vid, pid);
+        }
+        current = parent.parent();
+    }
+    (None, None)
+}
+
+pub fn find_usb_partitions() -> Vec<UsbPartition> {
     let mut partitions = Vec::new();
     let mut enumerator = match udev::Enumerator::new() {
         Ok(e) => e,
@@ -15,9 +57,6 @@ pub fn find_usb_partitions() -> Vec<String> {
 
     if let Ok(devices) = enumerator.scan_devices() {
         for device in devices {
-            if let Some(devnode) = device.devnode() {
-                debug!("udev examining: {:?}", devnode);
-            }
             let mut current = Some(device.clone());
             let mut is_usb = false;
             while let Some(parent) = current {
@@ -30,32 +69,44 @@ pub fn find_usb_partitions() -> Vec<String> {
                 current = parent.parent();
             }
 
-            if is_usb {
-                if let Some(devnode) = device.devnode() {
-                    debug!("USB Partition found via udev: {:?}", devnode);
-                    partitions.push(devnode.to_string_lossy().to_string());
-                }
+            if !is_usb {
+                continue;
+            }
+            if let Some(devnode) = device.devnode() {
+                let (vendor_id, product_id) = usb_ids_for_partition(&device);
+                let uuid = device
+                    .property_value("ID_FS_UUID")
+                    .map(|v| v.to_string_lossy().to_string());
+                let part = UsbPartition {
+                    devnode: devnode.to_string_lossy().to_string(),
+                    uuid,
+                    vendor_id,
+                    product_id,
+                };
+                debug!("USB partition found via udev: {:?}", part);
+                partitions.push(part);
             }
         }
     }
     partitions
 }
 
-pub fn get_partition_uuid(devnode: &str) -> Option<String> {
-    let mut enumerator = udev::Enumerator::new().ok()?;
-    enumerator.match_subsystem("block").ok()?;
-
-    let devices = enumerator.scan_devices().ok()?;
-    for device in devices {
-        if let Some(node) = device.devnode() {
-            if node.to_string_lossy() == devnode {
-                return device
-                    .property_value("ID_FS_UUID")
-                    .map(|v| v.to_string_lossy().to_string());
-            }
-        }
-    }
-    None
+/// Return the USB partition matching both a filesystem UUID and, when
+/// provided, a vendor/product id pair. Matching on VID/PID avoids
+/// picking up another plugged-in key when several are present.
+pub fn find_partition_by_uuid(
+    uuid: &str,
+    vendor_id: Option<u16>,
+    product_id: Option<u16>,
+) -> Option<UsbPartition> {
+    find_usb_partitions().into_iter().find(|part| {
+        let uuid_match = part.uuid.as_deref() == Some(uuid);
+        let ids_match = match (vendor_id, product_id) {
+            (Some(v), Some(p)) => part.vendor_id == Some(v) && part.product_id == Some(p),
+            _ => true,
+        };
+        uuid_match && ids_match
+    })
 }
 
 pub async fn mount_partition(part: &str) -> bool {
@@ -73,7 +124,7 @@ pub async fn mount_partition(part: &str) -> bool {
         }
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr);
-            // On ne log en error que si ce n'est pas "already mounted" car c'est un cas fréquent et normal
+            // Log at debug when already mounted: frequent and normal
             if stderr.contains("already mounted") {
                 debug!("Partition {} is already mounted.", part);
                 true
