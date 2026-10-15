@@ -116,54 +116,116 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }
 
                 if let Some(uuid) = device_uuid {
+                    if config.ignored_uuids.contains(&uuid) {
+                        debug!("Device {} is set to IgnoreForever; skipping.", uuid);
+                        continue;
+                    }
                     if config.approved_uuids.contains(&uuid) {
-                        // L'appareil est approuvé, on cherche sa config locale sur la clé
+                        // Whitelist: run the backup automatically
                         tokio::spawn(async move {
-                            // On attend que la clé soit montée pour lire sa config
+                            // Wait for the key to mount so its local config can be read
                             if let Some(dev_conf) =
                                 crate::handler::trigger_backup_by_uuid(vid, pid, &uuid).await
                             {
-                                info!("Backup terminée pour {}", dev_conf.name);
+                                info!("Backup finished for {}", dev_conf.name);
                             }
                         });
-                    } else {
-                        // Nouveau périphérique ou non approuvé
+                    } else if config.ask_each_time_uuids.contains(&uuid) {
+                        // AskEachTime: prompt on every plug-in
                         let product_clone = product.clone();
+                        let uuid_clone = uuid.clone();
                         tokio::task::spawn_blocking(move || {
-                            if dialoguer::Confirm::new()
+                            let run_now = dialoguer::Confirm::new()
                                 .with_prompt(format!(
-                                    "Nouveau périphérique ({}) détecté. Voulez-vous approuver cet UUID ({}) ?",
+                                    "Device '{}' ({}) is set to AskEachTime. Run a backup now?",
                                     product_clone, uuid
                                 ))
-                                .default(false)
+                                .default(true)
                                 .interact()
-                                .unwrap_or(false)
-                            {
-                                let mut config = load_config();
-                                if !config.approved_uuids.contains(&uuid) {
-                                    config.approved_uuids.push(uuid.clone());
-                                    if let Err(e) = crate::storage::save_config(&config) {
-                                        error!("Erreur sauvegarde config : {}", e);
-                                    }
-                                }
-
-                                let rt = tokio::runtime::Builder::new_current_thread()
-                                    .enable_all()
-                                    .build()
-                                    .unwrap();
-                                rt.block_on(async {
-                                    if let Err(e) =
-                                        crate::handler::run_wizard(vid, pid, &product_clone, &uuid)
-                                            .await
+                                .unwrap_or(false);
+                            if run_now {
+                                tokio::spawn(async move {
+                                    if let Some(dev_conf) =
+                                        crate::handler::trigger_backup_by_uuid(
+                                            vid, pid, &uuid_clone,
+                                        )
+                                        .await
                                     {
-                                        error!("Erreur Wizard : {}", e);
+                                        info!("Backup finished for {}", dev_conf.name);
                                     }
                                 });
                             }
                         });
+                    } else {
+                        // New (unapproved) device: pick a DeviceAction
+                        let product_clone = product.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let options = [
+                                "Approve and configure backups (Whitelist)",
+                                "Approve, but ask every time (AskEachTime)",
+                                "Ignore this device forever (IgnoreForever)",
+                                "Cancel",
+                            ];
+                            let selection = dialoguer::Select::new()
+                                .with_prompt(format!(
+                                    "New device '{}' detected ({}). Choose an action:",
+                                    product_clone, uuid
+                                ))
+                                .items(&options)
+                                .default(0)
+                                .interact()
+                                .unwrap_or(3);
+
+                            let mut config = load_config();
+                            match selection {
+                                0 => {
+                                    if !config.approved_uuids.contains(&uuid) {
+                                        config.approved_uuids.push(uuid.clone());
+                                        if let Err(e) = crate::storage::save_config(&config) {
+                                            error!("Failed to save config: {}", e);
+                                        }
+                                    }
+
+                                    let rt = tokio::runtime::Builder::new_current_thread()
+                                        .enable_all()
+                                        .build()
+                                        .unwrap();
+                                    rt.block_on(async {
+                                        if let Err(e) = crate::handler::run_wizard(
+                                            vid, pid, &product_clone, &uuid,
+                                        )
+                                        .await
+                                        {
+                                            error!("Wizard error: {}", e);
+                                        }
+                                    });
+                                }
+                                1 => {
+                                    if !config.ask_each_time_uuids.contains(&uuid) {
+                                        config.ask_each_time_uuids.push(uuid.clone());
+                                        if let Err(e) = crate::storage::save_config(&config) {
+                                            error!("Failed to save config: {}", e);
+                                        }
+                                    }
+                                    info!("Device {} set to AskEachTime.", uuid);
+                                }
+                                2 => {
+                                    if !config.ignored_uuids.contains(&uuid) {
+                                        config.ignored_uuids.push(uuid.clone());
+                                        if let Err(e) = crate::storage::save_config(&config) {
+                                            error!("Failed to save config: {}", e);
+                                        }
+                                    }
+                                    info!("Device {} set to IgnoreForever.", uuid);
+                                }
+                                _ => {
+                                    debug!("Device {} approval cancelled.", uuid);
+                                }
+                            }
+                        });
                     }
                 } else {
-                    warn!("Impossible d'extraire l'UUID pour l'appareil {}.", product);
+                    warn!("Unable to extract UUID for device {}.", product);
                 }
             }
             HotplugEvent::Disconnected(_) => {
