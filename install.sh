@@ -112,11 +112,14 @@ info "Binary downloaded"
 CHECKSUMS_URL="${DOWNLOAD_URL%/*}/SHA256SUMS"
 echo "→ Verifying SHA256 checksum …"
 if curl -fsSL -o "${TMP_DIR}/SHA256SUMS" "$CHECKSUMS_URL" 2>/dev/null; then
-    (
-        cd "$TMP_DIR"
-        grep " ${ASSET}\$" SHA256SUMS | sha256sum -c -
-    ) || die "Checksum verification FAILED — refusing to install."
-    info "Checksum OK"
+    EXPECTED="$(grep -E "[ /]${ASSET}\$" "${TMP_DIR}/SHA256SUMS" | awk '{print $1}' | head -1)"
+    if [[ -z "$EXPECTED" ]]; then
+        warn "No checksum entry for ${ASSET} in SHA256SUMS; skipping verification."
+    else
+        ACTUAL="$(sha256sum "${TMP_DIR}/${ASSET}" | awk '{print $1}')"
+        [[ "$ACTUAL" == "$EXPECTED" ]] || die "Checksum verification FAILED — refusing to install."
+        info "Checksum OK"
+    fi
 else
     warn "SHA256SUMS not found in this release; skipping verification."
 fi
