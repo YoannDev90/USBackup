@@ -31,7 +31,7 @@
 //! blocks already catch the append / insert / contiguous-edit cases that
 //! dominate real document backups.
 
-use crate::sync::digest::{xxh3_bytes, BlockTable};
+use crate::sync::digest::{rolling_hash, xxh3_bytes, BlockTable, ROLLING_BASE};
 use std::collections::HashMap;
 use std::fs::File;
 use std::hash::Hasher;
@@ -149,17 +149,15 @@ pub fn adaptive_block_size(len: u64) -> u32 {
     sqrt.clamp(8 * 1024, 1024 * 1024)
 }
 
-/// Polynomial base for the rolling hash. Odd and large, so the hash wraps
-/// over the full u64 space.
-const BASE: u64 = 0x100_0000_0000_0001;
-
 /// Incremental Rabin-Karp rolling hash over a fixed-size window.
 ///
 /// Maintains the hash in O(1) per byte instead of recomputing O(window) work
 /// at every offset, which is what makes byte-by-byte scanning affordable.
+/// Uses the shared [`ROLLING_BASE`] so its output always matches the
+/// `weak_rolling` values stored in a [`BlockTable`].
 pub struct RollingHash {
     size: usize,
-    /// BASE^(size-1), precomputed so a byte can be shifted out in O(1).
+    /// `ROLLING_BASE^(size-1)`, precomputed so a byte can be shifted out O(1).
     top_power: u64,
     h: u64,
     filled: usize,
@@ -169,7 +167,7 @@ impl RollingHash {
     pub fn new(size: usize) -> Self {
         let mut top_power: u64 = 1;
         for _ in 1..size {
-            top_power = top_power.wrapping_mul(BASE);
+            top_power = top_power.wrapping_mul(ROLLING_BASE);
         }
         Self {
             size,
@@ -187,7 +185,7 @@ impl RollingHash {
             // `slide`; this path is only used when `slide` is not called.
             unreachable!("use slide() once the window is full");
         }
-        self.h = self.h.wrapping_mul(BASE).wrapping_add(byte as u64);
+        self.h = self.h.wrapping_mul(ROLLING_BASE).wrapping_add(byte as u64);
         self.filled += 1;
         self.filled == self.size
     }
@@ -199,7 +197,7 @@ impl RollingHash {
         self.h = self
             .h
             .wrapping_sub((outgoing as u64).wrapping_mul(self.top_power))
-            .wrapping_mul(BASE)
+            .wrapping_mul(ROLLING_BASE)
             .wrapping_add(incoming as u64);
         self.h
     }
@@ -207,16 +205,6 @@ impl RollingHash {
     pub fn current(&self) -> u64 {
         self.h
     }
-}
-
-/// Compute the weak rolling hash of a full block (non-incremental, for tests
-/// and for building tables).
-pub fn rolling_hash(data: &[u8]) -> u64 {
-    let mut h: u64 = 0;
-    for &b in data {
-        h = h.wrapping_mul(BASE).wrapping_add(b as u64);
-    }
-    h
 }
 
 /// Lookup structure built from a base [`BlockTable`]: weak hash → candidate
