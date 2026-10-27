@@ -9,6 +9,9 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use sysinfo::Disks;
+// Only the rsync path reads a child's piped stdout/stderr; the sync-engine
+// path gets progress via callback, so these imports are unused there.
+#[cfg(not(feature = "sync-engine"))]
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
 
@@ -48,7 +51,10 @@ pub async fn trigger_backup_by_uuid(_vid: u16, _pid: u16, uuid: &str) -> Option<
                 part.devnode, part.uuid, part.vendor_id, part.product_id
             );
             if part.uuid.as_deref() == Some(uuid) {
-                debug!("Partition {} matches; attempting udisksctl mount", part.devnode);
+                debug!(
+                    "Partition {} matches; attempting udisksctl mount",
+                    part.devnode
+                );
                 if mount_partition(&part.devnode).await {
                     // Success
                 }
@@ -264,207 +270,299 @@ async fn inner_trigger_backup(
                 continue;
             }
 
-            // Use rsync for efficient synchronization
-            let mut cmd = TokioCommand::new("rsync");
-            // -a: archive, -v: verbose, -P: progress and partial.
-            // No -z: this is a local USB transfer, compression wastes CPU.
-            cmd.arg("-avP");
+            #[cfg(not(feature = "sync-engine"))]
+            {
+                // Use rsync for efficient synchronization
+                let mut cmd = TokioCommand::new("rsync");
+                // -a: archive, -v: verbose, -P: progress and partial.
+                // No -z: this is a local USB transfer, compression wastes CPU.
+                cmd.arg("-avP");
 
-            if rule.delete_missing {
-                cmd.arg("--delete");
-            }
-
-            // Add exclusions
-            for pattern in &rule.exclude {
-                cmd.arg(format!("--exclude={}", pattern));
-            }
-
-            // Automatic .gitignore detection
-            if let Ok(gitignore_path) = find_local_gitignore(&rule.source_path) {
-                info!(
-                    "Using local .gitignore exclusions from {:?}",
-                    gitignore_path
-                );
-                cmd.arg(format!(
-                    "--exclude-from={}",
-                    gitignore_path.to_string_lossy()
-                ));
-            }
-
-            // Incremental snapshots handling
-            let final_dest = if rule.incremental {
-                let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-                let snapshot_path = full_dest.join(&timestamp);
-                let latest_link = full_dest.join("latest");
-
-                if latest_link.exists() {
-                    debug!("link-dest: reusing hard links from {:?}", latest_link);
-                    cmd.arg(format!("--link-dest={}", latest_link.to_string_lossy()));
-                } else {
-                    debug!("No 'latest' link yet; first snapshot for {:?}", full_dest);
+                if rule.delete_missing {
+                    cmd.arg("--delete");
                 }
 
-                if let Err(e) = std::fs::create_dir_all(&snapshot_path) {
-                    error!(
-                        "Unable to create snapshot directory {:?}: {}",
-                        snapshot_path, e
+                // Add exclusions
+                for pattern in &rule.exclude {
+                    cmd.arg(format!("--exclude={}", pattern));
+                }
+
+                // Automatic .gitignore detection
+                if let Ok(gitignore_path) = find_local_gitignore(&rule.source_path) {
+                    info!(
+                        "Using local .gitignore exclusions from {:?}",
+                        gitignore_path
                     );
-                    has_errors = true;
-                    continue;
+                    cmd.arg(format!(
+                        "--exclude-from={}",
+                        gitignore_path.to_string_lossy()
+                    ));
                 }
-                snapshot_path
-            } else {
-                full_dest.clone()
-            };
 
-            cmd.arg(&rule.source_path).arg(&final_dest);
-            cmd.stdout(std::process::Stdio::piped());
-            cmd.stderr(std::process::Stdio::piped());
+                // Incremental snapshots handling
+                let final_dest = if rule.incremental {
+                    let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+                    let snapshot_path = full_dest.join(&timestamp);
+                    let latest_link = full_dest.join("latest");
 
-            debug!("Spawning: {:?}", cmd);
+                    if latest_link.exists() {
+                        debug!("link-dest: reusing hard links from {:?}", latest_link);
+                        cmd.arg(format!("--link-dest={}", latest_link.to_string_lossy()));
+                    } else {
+                        debug!("No 'latest' link yet; first snapshot for {:?}", full_dest);
+                    }
 
-            let mut child = match cmd.spawn() {
-                Ok(c) => c,
-                Err(e) => {
-                    error!("Failed to spawn rsync: {}", e);
-                    has_errors = true;
-                    continue;
-                }
-            };
+                    if let Err(e) = std::fs::create_dir_all(&snapshot_path) {
+                        error!(
+                            "Unable to create snapshot directory {:?}: {}",
+                            snapshot_path, e
+                        );
+                        has_errors = true;
+                        continue;
+                    }
+                    snapshot_path
+                } else {
+                    full_dest.clone()
+                };
 
-            let stdout = child.stdout.take().unwrap();
-            let stderr = child.stderr.take().unwrap();
-            let mut stdout_reader = BufReader::new(stdout).lines();
-            let mut stderr_reader = BufReader::new(stderr).lines();
+                cmd.arg(&rule.source_path).arg(&final_dest);
+                cmd.stdout(std::process::Stdio::piped());
+                cmd.stderr(std::process::Stdio::piped());
 
-            let pb = ProgressBar::new(100);
-            pb.set_style(
-                ProgressStyle::with_template(
-                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg} ({pos}%)",
-                )
-                .unwrap()
-                .progress_chars("#>-"),
-            );
-            pb.set_message(format!(
-                "Syncing {}",
-                Path::new(&rule.source_path)
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-            ));
+                debug!("Spawning: {:?}", cmd);
 
-            let mut full_output = String::new();
-            let mut error_output = String::new();
+                let mut child = match cmd.spawn() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!("Failed to spawn rsync: {}", e);
+                        has_errors = true;
+                        continue;
+                    }
+                };
 
-            loop {
-                tokio::select! {
-                    line = stdout_reader.next_line() => {
-                        match line {
-                            Ok(Some(l)) => {
-                                // Rsync --progress outputs lines like:
-                                //       32,768   0%    0.00kB/s    0:00:00
-                                if l.contains('%') {
-                                    let parts: Vec<&str> = l.split_whitespace().collect();
-                                    for part in parts {
-                                        if part.contains('%') {
-                                            let pct_str = part.trim_end_matches('%');
-                                            if let Ok(pct) = pct_str.parse::<u64>() {
-                                                pb.set_position(pct);
+                let stdout = child.stdout.take().unwrap();
+                let stderr = child.stderr.take().unwrap();
+                let mut stdout_reader = BufReader::new(stdout).lines();
+                let mut stderr_reader = BufReader::new(stderr).lines();
+
+                let pb = ProgressBar::new(100);
+                pb.set_style(
+                    ProgressStyle::with_template(
+                        "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg} ({pos}%)",
+                    )
+                    .unwrap()
+                    .progress_chars("#>-"),
+                );
+                pb.set_message(format!(
+                    "Syncing {}",
+                    Path::new(&rule.source_path)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                ));
+
+                let mut full_output = String::new();
+                let mut error_output = String::new();
+
+                loop {
+                    tokio::select! {
+                        line = stdout_reader.next_line() => {
+                            match line {
+                                Ok(Some(l)) => {
+                                    // Rsync --progress outputs lines like:
+                                    //       32,768   0%    0.00kB/s    0:00:00
+                                    if l.contains('%') {
+                                        let parts: Vec<&str> = l.split_whitespace().collect();
+                                        for part in parts {
+                                            if part.contains('%') {
+                                                let pct_str = part.trim_end_matches('%');
+                                                if let Ok(pct) = pct_str.parse::<u64>() {
+                                                    pb.set_position(pct);
+                                                }
                                             }
                                         }
                                     }
+                                    full_output.push_str(&l);
+                                    full_output.push('\n');
                                 }
-                                full_output.push_str(&l);
-                                full_output.push('\n');
+                                _ => break,
                             }
-                            _ => break,
+                        }
+                        line = stderr_reader.next_line() => {
+                            if let Ok(Some(l)) = line {
+                                error_output.push_str(&l);
+                                error_output.push('\n');
+                            }
                         }
                     }
-                    line = stderr_reader.next_line() => {
-                        if let Ok(Some(l)) = line {
-                            error_output.push_str(&l);
-                            error_output.push('\n');
+                }
+
+                let status = child.wait().await;
+                pb.finish_and_clear();
+
+                match status {
+                    Ok(s) if s.success() => {
+                        info!("Success for {}", rule.source_path);
+                        debug!(
+                            "rsync exit 0; captured {} bytes of stdout for the device log",
+                            full_output.len()
+                        );
+                        append_to_log(&device_config.name, &rule.source_path, &full_output);
+
+                        // Update 'latest' symlink for incremental backups
+                        if rule.incremental {
+                            let latest_link = full_dest.join("latest");
+                            if latest_link.exists() {
+                                let _ = std::fs::remove_file(&latest_link);
+                            }
+                            // Need the relative path for the symlink to be portable
+                            if let Some(snapshot_name) = final_dest.file_name() {
+                                let _ = std::os::unix::fs::symlink(snapshot_name, &latest_link);
+                            }
                         }
+
+                        // Post-backup script: run to completion and check the exit code
+                        if let Some(script) = &rule.post_backup_script {
+                            if !run_post_backup_script(
+                                script,
+                                &rule.source_path,
+                                &device_config.name,
+                            )
+                            .await
+                            {
+                                has_errors = true;
+                            }
+                        }
+                    }
+                    Ok(s) => {
+                        let code = s.code().unwrap_or(-1);
+                        error!("Rsync failed with code {} for {}", code, rule.source_path);
+                        notifications::notify_backup_error(
+                            &device_config.name,
+                            &format!("rsync error (code {}). Check the logs.", code),
+                        );
+                        append_to_log(
+                            &device_config.name,
+                            &rule.source_path,
+                            &format!("FAILED (code {})\n{}", code, error_output),
+                        );
+                        has_errors = true;
+                    }
+                    Err(e) => {
+                        error!("Error waiting for rsync: {}", e);
+                        has_errors = true;
                     }
                 }
             }
+            #[cfg(feature = "sync-engine")]
+            {
+                use crate::sync::filter::Filter;
+                use crate::sync::{RetentionPolicy, SnapshotStore, SyncEngine};
 
-            let status = child.wait().await;
-            pb.finish_and_clear();
+                // Exclusions: the rule's explicit patterns plus a local
+                // .gitignore, mirroring rsync's --exclude / --exclude-from.
+                let mut filter_builder = Filter::builder().add_patterns(&rule.exclude);
+                if let Ok(gi_path) = find_local_gitignore(&rule.source_path) {
+                    filter_builder = filter_builder.add_gitignore(&gi_path);
+                }
+                let filter = filter_builder.build();
 
-            match status {
-                Ok(s) if s.success() => {
-                    info!("Success for {}", rule.source_path);
-                    debug!(
-                        "rsync exit 0; captured {} bytes of stdout for the device log",
-                        full_output.len()
-                    );
-                    append_to_log(&device_config.name, &rule.source_path, &full_output);
+                let pb = ProgressBar::new(100);
+                pb.set_style(
+                    ProgressStyle::with_template(
+                        "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg} ({pos}%)",
+                    )
+                    .unwrap()
+                    .progress_chars("#>-"),
+                );
+                pb.set_message(format!(
+                    "Syncing {}",
+                    Path::new(&rule.source_path)
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                ));
 
-                    // Update 'latest' symlink for incremental backups
-                    if rule.incremental {
-                        let latest_link = full_dest.join("latest");
-                        if latest_link.exists() {
-                            let _ = std::fs::remove_file(&latest_link);
-                        }
-                        // Need the relative path for the symlink to be portable
-                        if let Some(snapshot_name) = final_dest.file_name() {
-                            let _ = std::os::unix::fs::symlink(snapshot_name, &latest_link);
-                        }
+                let src = Path::new(&rule.source_path).to_path_buf();
+                let prune = rule.delete_missing;
+                let incremental = rule.incremental;
+                let pb_progress = pb.clone();
+
+                // The engine is synchronous (blocking I/O): run it off the async
+                // executor with spawn_blocking, the pattern main.rs already uses.
+                let join = tokio::task::spawn_blocking(move || {
+                    if incremental {
+                        let store = SnapshotStore::new(&full_dest);
+                        store
+                            .create_snapshot(&src, &RetentionPolicy::default())
+                            .map(|r| {
+                                format!(
+                                    "snapshot {}: {} copied, {} linked, {} symlinks preserved",
+                                    r.dir_name,
+                                    r.stats.files_copied,
+                                    r.stats.files_linked,
+                                    r.stats.symlinks_preserved
+                                )
+                            })
+                    } else {
+                        let engine = SyncEngine {
+                            exclude: filter,
+                            progress: Some(Box::new(move |p| {
+                                pb_progress.set_position(
+                                    p.bytes_done.saturating_mul(100) / p.bytes_total.max(1),
+                                );
+                                pb_progress.set_message(format!(
+                                    "{} / {} files",
+                                    p.files_done, p.files_total
+                                ));
+                            })),
+                            ..SyncEngine::default()
+                        };
+                        engine.run(&src, &full_dest, prune).map(|s| {
+                            format!(
+                                "{} copied, {} removed, {} symlinks preserved ({} errors)",
+                                s.files_copied, s.files_removed, s.symlinks_preserved, s.errors
+                            )
+                        })
                     }
+                })
+                .await;
+                pb.finish_and_clear();
 
-                    // Post-backup script: run to completion and check the exit code
-                    if let Some(script) = &rule.post_backup_script {
-                        info!("Running post-backup script: {}", script);
-                        match TokioCommand::new("sh")
-                            .arg("-c")
-                            .arg(script)
-                            .output()
+                match join {
+                    Ok(Ok(summary)) => {
+                        info!("Success for {}", rule.source_path);
+                        debug!("sync-engine summary: {}", summary);
+                        append_to_log(&device_config.name, &rule.source_path, &summary);
+                        if let Some(script) = &rule.post_backup_script {
+                            if !run_post_backup_script(
+                                script,
+                                &rule.source_path,
+                                &device_config.name,
+                            )
                             .await
-                        {
-                            Ok(out) if out.status.success() => {
-                                info!(
-                                    "Post-backup script succeeded for {}",
-                                    rule.source_path
-                                );
-                            }
-                            Ok(out) => {
-                                let code = out.status.code().unwrap_or(-1);
-                                let stderr = String::from_utf8_lossy(&out.stderr);
-                                error!(
-                                    "Post-backup script failed (code {}): {} — {}",
-                                    code, script, stderr
-                                );
-                                notifications::notify_backup_error(
-                                    &device_config.name,
-                                    &format!("Post-backup script failed (code {}).", code),
-                                );
-                                has_errors = true;
-                            }
-                            Err(e) => {
-                                error!("Failed to spawn post-backup script {}: {}", script, e);
+                            {
                                 has_errors = true;
                             }
                         }
                     }
-                }
-                Ok(s) => {
-                    let code = s.code().unwrap_or(-1);
-                    error!("Rsync failed with code {} for {}", code, rule.source_path);
-                    notifications::notify_backup_error(
-                        &device_config.name,
-                        &format!("rsync error (code {}). Check the logs.", code),
-                    );
-                    append_to_log(
-                        &device_config.name,
-                        &rule.source_path,
-                        &format!("FAILED (code {})\n{}", code, error_output),
-                    );
-                    has_errors = true;
-                }
-                Err(e) => {
-                    error!("Error waiting for rsync: {}", e);
-                    has_errors = true;
+                    Ok(Err(e)) => {
+                        error!("Sync engine failed for {}: {}", rule.source_path, e);
+                        notifications::notify_backup_error(
+                            &device_config.name,
+                            "Sync error. Check the logs.",
+                        );
+                        append_to_log(
+                            &device_config.name,
+                            &rule.source_path,
+                            &format!("FAILED: {}", e),
+                        );
+                        has_errors = true;
+                    }
+                    Err(e) => {
+                        error!("Sync task join error for {}: {}", rule.source_path, e);
+                        has_errors = true;
+                    }
                 }
             }
         }
@@ -497,7 +595,6 @@ async fn inner_trigger_backup(
             &device_config.name,
             "Unable to locate the disk mount point.",
         );
-        return;
     }
 }
 
@@ -542,6 +639,36 @@ fn append_to_log(device_name: &str, source: &str, content: &str) {
 
     if let Err(e) = file.write_all(log_entry.as_bytes()) {
         error!("Could not write to log file: {}", e);
+    }
+}
+
+/// Run a rule's post-backup script to completion and report whether it
+/// succeeded. Logs and notifies on failure; the caller decides whether that
+/// counts as a backup error. Shared by the rsync and sync-engine paths.
+async fn run_post_backup_script(script: &str, source: &str, device_name: &str) -> bool {
+    info!("Running post-backup script: {}", script);
+    match TokioCommand::new("sh").arg("-c").arg(script).output().await {
+        Ok(out) if out.status.success() => {
+            info!("Post-backup script succeeded for {}", source);
+            true
+        }
+        Ok(out) => {
+            let code = out.status.code().unwrap_or(-1);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            error!(
+                "Post-backup script failed (code {}): {} — {}",
+                code, script, stderr
+            );
+            notifications::notify_backup_error(
+                device_name,
+                &format!("Post-backup script failed (code {}).", code),
+            );
+            false
+        }
+        Err(e) => {
+            error!("Failed to spawn post-backup script {}: {}", script, e);
+            false
+        }
     }
 }
 

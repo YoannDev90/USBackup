@@ -35,6 +35,13 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 lz4_flex = "0.11"
 rayon = "1"
 
+[features]
+default = []
+# Use the pure-Rust sync engine instead of the external `rsync` binary.
+# Off by default: the engine stays opt-in until it is validated end-to-end on
+# Linux, macOS and Windows (rsync remains the shipped fallback).
+sync-engine = []
+
 [dev-dependencies]
 tempfile = "3"
 
