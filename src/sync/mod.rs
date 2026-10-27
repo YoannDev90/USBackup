@@ -19,12 +19,14 @@
 // allows everywhere.
 #![allow(dead_code, unused_imports)]
 
+pub mod compare;
 pub mod error;
 pub mod filter;
 pub mod progress;
 pub mod tree;
 
 // Re-exports for the public surface of the engine.
+pub use compare::{compare, Action, PlanItem};
 pub use error::{Result, SyncError};
 pub use progress::{Progress, Stats};
 pub use tree::{scan, EntryMeta, TreeIndex};

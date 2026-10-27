@@ -28,6 +28,9 @@ pub struct EntryMeta {
     pub mtime: SystemTime,
     pub is_dir: bool,
     pub is_symlink: bool,
+    /// Raw symlink target (only set when `is_symlink`). Part of the entry's
+    /// identity: a changed target means the link must be recreated.
+    pub link_target: Option<PathBuf>,
 }
 
 /// An indexed tree: relative path → metadata.
@@ -61,7 +64,8 @@ impl TreeIndex {
         self.entries.values()
     }
 
-    fn insert(&mut self, meta: EntryMeta) {
+    /// Insert an entry. Used by the scanner and by tests.
+    pub(crate) fn insert(&mut self, meta: EntryMeta) {
         self.entries.insert(meta.rel_path.clone(), meta);
     }
 }
@@ -116,12 +120,23 @@ pub fn scan(root: &Path) -> Result<TreeIndex> {
         let len = md.len();
         let mtime = md.modified().unwrap_or(SystemTime::UNIX_EPOCH);
 
+        // For a symlink, capture the raw target (never dereferenced) so it can
+        // be recreated verbatim and so a changed target is detected later.
+        let link_target = if is_symlink {
+            std::fs::read_link(entry.path())
+                .map_err(|e| SyncError::io(entry.path(), e))
+                .ok()
+        } else {
+            None
+        };
+
         index.insert(EntryMeta {
             rel_path,
             len,
             mtime,
             is_dir,
             is_symlink,
+            link_target,
         });
     }
 
@@ -176,6 +191,8 @@ mod tests {
         // len is the target string length ("real.txt" = 9), NOT 10.
         assert_eq!(entry.len, "real.txt".len() as u64);
         assert!(!entry.is_dir);
+        // The raw target is captured verbatim, not dereferenced.
+        assert_eq!(entry.link_target.as_deref(), Some(Path::new("real.txt")));
     }
 
     #[test]
