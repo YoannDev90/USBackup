@@ -32,6 +32,7 @@ pub mod meta;
 pub mod pipeline;
 pub mod progress;
 pub mod sparse;
+pub mod symlink;
 pub mod tree;
 
 // Re-exports for the public surface of the engine.
@@ -47,4 +48,5 @@ pub use meta::{copy_metadata, set_mtime, PreservedMeta};
 pub use pipeline::copy_file_pipelined;
 pub use progress::{Progress, Stats};
 pub use sparse::{copy_sparse, is_sparse};
+pub use symlink::{recreate_symlink, LinkTarget, SymlinkManifest};
 pub use tree::{scan, EntryMeta, TreeIndex};
