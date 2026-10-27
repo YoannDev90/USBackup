@@ -21,6 +21,7 @@
 
 pub mod compare;
 pub mod copy;
+pub mod delta;
 pub mod digest;
 pub mod error;
 pub mod filter;
@@ -31,6 +32,7 @@ pub mod tree;
 // Re-exports for the public surface of the engine.
 pub use compare::{compare, Action, PlanItem};
 pub use copy::{copy_file_atomic, is_temp_file};
+pub use delta::{DeltaPolicy, DeltaScript};
 pub use digest::{file_digest, FileDigest};
 pub use error::{Result, SyncError};
 pub use meta::{copy_metadata, set_mtime, PreservedMeta};
