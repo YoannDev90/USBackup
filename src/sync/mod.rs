@@ -20,6 +20,7 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod compare;
+pub mod compress;
 pub mod copy;
 pub mod delta;
 pub mod digest;
@@ -32,6 +33,7 @@ pub mod tree;
 
 // Re-exports for the public surface of the engine.
 pub use compare::{compare, Action, PlanItem};
+pub use compress::{compress, decompress, Compression};
 pub use copy::{copy_file_atomic, is_temp_file};
 pub use delta::{DeltaPolicy, DeltaScript};
 pub use digest::{file_digest, FileDigest};
