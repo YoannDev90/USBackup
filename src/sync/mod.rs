@@ -33,6 +33,7 @@ pub mod link;
 pub mod meta;
 pub mod pipeline;
 pub mod progress;
+pub mod snapshot;
 pub mod sparse;
 pub mod symlink;
 pub mod tree;
@@ -51,6 +52,9 @@ pub use link::{link_or_copy, LinkOutcome};
 pub use meta::{copy_metadata, set_mtime, PreservedMeta};
 pub use pipeline::copy_file_pipelined;
 pub use progress::{Progress, Stats};
+pub use snapshot::{
+    RetentionPolicy, SnapshotEntry, SnapshotManifest, SnapshotReport, SnapshotStore,
+};
 pub use sparse::{copy_sparse, is_sparse};
 pub use symlink::{recreate_symlink, LinkTarget, SymlinkManifest};
 pub use tree::{scan, EntryMeta, TreeIndex};

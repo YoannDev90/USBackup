@@ -25,6 +25,11 @@ pub enum Action {
     Symlink,
     /// Copy the file from the source.
     Copy,
+    /// Hard-link an unchanged file from the engine's `base_root` (a previous
+    /// snapshot), falling back to a copy when the filesystem cannot link. Only
+    /// the snapshot layer emits this — [`compare`] diffs a source against a
+    /// destination and never links.
+    LinkOrCopy,
     /// Nothing to do: already up to date.
     Skip,
     /// Delete an orphan present only in the destination (prune mode).

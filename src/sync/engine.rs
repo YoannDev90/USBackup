@@ -45,6 +45,7 @@
 use crate::sync::compare::{compare, Action, PlanItem};
 use crate::sync::copy::copy_file_atomic;
 use crate::sync::error::{Result, SyncError};
+use crate::sync::link::{link_or_copy, LinkOutcome};
 use crate::sync::progress::{Progress, Stats};
 use crate::sync::symlink::{create_symlink, recreate_symlink};
 use crate::sync::tree::{scan, TreeIndex};
@@ -52,7 +53,7 @@ use rayon::prelude::*;
 use std::cell::RefCell;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -104,6 +105,10 @@ pub struct SyncEngine {
     pub bulk_threshold: u64,
     /// Optional progress callback, invoked as files complete.
     pub progress: Option<ProgressCallback>,
+    /// Base snapshot root: where [`Action::LinkOrCopy`] items are hard-linked
+    /// from. Set by the snapshot layer; `None` for a normal sync (in which case
+    /// a stray `LinkOrCopy` degrades to a copy).
+    pub base_root: Option<PathBuf>,
     /// Cooperative cancellation flag; when set, pending items are skipped.
     pub cancel: Arc<AtomicBool>,
 }
@@ -116,6 +121,7 @@ impl Default for SyncEngine {
             buffer_size: DEFAULT_BUFFER_SIZE,
             bulk_threshold: DEFAULT_BULK_THRESHOLD,
             progress: None,
+            base_root: None,
             cancel: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -129,6 +135,7 @@ impl std::fmt::Debug for SyncEngine {
             .field("buffer_size", &self.buffer_size)
             .field("bulk_threshold", &self.bulk_threshold)
             .field("progress", &self.progress.is_some())
+            .field("base_root", &self.base_root)
             .field("cancel", &self.cancel)
             .finish()
     }
@@ -260,7 +267,10 @@ impl SyncEngine {
 
         let src = src_root.join(&item.rel_path);
         let dst = dst_root.join(&item.rel_path);
-        let is_file_action = matches!(item.action, Action::Copy | Action::Symlink | Action::Remove);
+        let is_file_action = matches!(
+            item.action,
+            Action::Copy | Action::Symlink | Action::Remove | Action::LinkOrCopy
+        );
 
         match item.action {
             Action::Skip => return,
@@ -280,6 +290,9 @@ impl SyncEngine {
             }
             Action::Copy => {
                 self.execute_copy(state, &src, &dst, item);
+            }
+            Action::LinkOrCopy => {
+                self.execute_link(state, &src, &dst, item);
             }
             Action::Remove => {
                 if remove_entry(&dst) {
@@ -348,6 +361,54 @@ impl SyncEngine {
             }
         }
     }
+
+    /// Hard-link an unchanged file from `base_root` into the destination (the
+    /// snapshot fast path), or copy it from the source when no base is set.
+    ///
+    /// A link is a microseconds-long `hard_link` that moves zero bytes; if the
+    /// filesystem cannot link (FAT32/exFAT) [`link_or_copy`] degrades to a real
+    /// copy. `Ok(Linked)` advances `files_linked`; `Ok(Copied)` advances the
+    /// copy+byte counters, since that path actually moved data.
+    fn execute_link(&self, state: &RunState, src: &Path, dst: &Path, item: &PlanItem) {
+        // LinkOrCopy is O(1) regardless of size, so it always runs with the
+        // smaller metadata-class buffer (only used if the copy fallback fires).
+        let needed = METADATA_BUFFER_SIZE.max(1);
+
+        match &self.base_root {
+            Some(base_root) => {
+                let from = base_root.join(&item.rel_path);
+                let outcome = COPY_BUF.with(|cell| {
+                    let mut buf = cell.borrow_mut();
+                    if buf.len() < needed {
+                        buf.resize(needed, 0);
+                    }
+                    link_or_copy(&from, dst, &mut buf[..needed])
+                });
+                match outcome {
+                    Ok(LinkOutcome::Linked) => {
+                        state.files_linked.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Ok(LinkOutcome::Copied) => {
+                        // Fallback copied from base; count bytes as moved.
+                        state.files_copied.fetch_add(1, Ordering::Relaxed);
+                        if let Ok(md) = fs::metadata(dst) {
+                            let n = md.len();
+                            state.bytes_copied.fetch_add(n, Ordering::Relaxed);
+                            state.bytes_done.fetch_add(n, Ordering::Relaxed);
+                        }
+                    }
+                    Err(_) => {
+                        state.errors.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+            None => {
+                // No base configured: fall back to a plain copy from source so
+                // the file still lands correctly.
+                self.execute_copy(state, src, dst, item);
+            }
+        }
+    }
 }
 
 /// Remove a destination entry without following it: a symlink is unlinked (its
@@ -370,6 +431,7 @@ struct RunState {
     files_done: AtomicU64,
     bytes_done: AtomicU64,
     files_copied: AtomicU64,
+    files_linked: AtomicU64,
     files_removed: AtomicU64,
     dirs_created: AtomicU64,
     bytes_copied: AtomicU64,
@@ -397,6 +459,7 @@ impl RunState {
             files_done: AtomicU64::new(0),
             bytes_done: AtomicU64::new(0),
             files_copied: AtomicU64::new(0),
+            files_linked: AtomicU64::new(0),
             files_removed: AtomicU64::new(0),
             dirs_created: AtomicU64::new(0),
             bytes_copied: AtomicU64::new(0),
@@ -419,7 +482,7 @@ impl RunState {
     fn into_stats(self, elapsed: std::time::Duration) -> Stats {
         Stats {
             files_copied: self.files_copied.load(Ordering::Relaxed),
-            files_linked: 0,  // hard-link placement is the snapshot layer (M8)
+            files_linked: self.files_linked.load(Ordering::Relaxed),
             files_skipped: 0, // populated by callers that track skips, if needed
             files_removed: self.files_removed.load(Ordering::Relaxed),
             dirs_created: self.dirs_created.load(Ordering::Relaxed),
