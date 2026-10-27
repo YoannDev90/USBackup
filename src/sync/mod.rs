@@ -20,6 +20,7 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod error;
+pub mod filter;
 pub mod progress;
 pub mod tree;
 
