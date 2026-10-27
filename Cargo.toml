@@ -10,7 +10,7 @@ readme = "README.md"
 [dependencies]
 nusb = "0.2.3"
 futures-lite = "2.6.0"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 notify-rust = "4.11"
@@ -28,6 +28,27 @@ sha2 = "0.11.0"
 hex = "0.4.3"
 rand = "0.10.1"
 directories = "6.0.0"
+walkdir = "2"
+thiserror = "2"
+ignore = "0.4"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+lz4_flex = "0.11"
+rayon = "1"
+
+[features]
+default = []
+# Use the pure-Rust sync engine instead of the external `rsync` binary.
+# Off by default: the engine stays opt-in until it is validated end-to-end on
+# Linux, macOS and Windows (rsync remains the shipped fallback).
+sync-engine = []
+
+[dev-dependencies]
+tempfile = "3"
+criterion = "0.5"
+
+[[bench]]
+name = "sync_engine"
+harness = false
 
 [profile.release]
 lto = true

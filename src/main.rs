@@ -4,6 +4,7 @@ mod handler;
 mod models;
 mod notifications;
 mod storage;
+mod sync;
 mod tui_lock;
 
 use crate::storage::{load_config, PendingDevice};
@@ -126,9 +127,7 @@ fn cmd_list_devices() {
     }
 }
 
-async fn cmd_approve(
-    args: &[String],
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn cmd_approve(args: &[String]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let uuid = args
         .first()
         .ok_or("usage: usbackup approve <uuid> [--configure]")?;
@@ -167,12 +166,7 @@ async fn cmd_approve(
     Ok(())
 }
 
-async fn handle_new_device_interactive(
-    vid: u16,
-    pid: u16,
-    product: &str,
-    uuid: &str,
-) {
+async fn handle_new_device_interactive(vid: u16, pid: u16, product: &str, uuid: &str) {
     let _guard = tui_lock::lock().await;
     let options = [
         "Approve and configure backups (Whitelist)",
@@ -185,7 +179,7 @@ async fn handle_new_device_interactive(
             "New device '{}' detected ({}). Choose an action:",
             product, uuid
         ))
-        .items(&options)
+        .items(options)
         .default(0)
         .interact()
         .unwrap_or(3);
@@ -348,8 +342,8 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         if std::io::stdin().is_terminal() {
                             let product_clone = product.clone();
                             tokio::task::spawn_blocking(move || {
-                                let _guard = tokio::runtime::Handle::current()
-                                    .block_on(tui_lock::lock());
+                                let _guard =
+                                    tokio::runtime::Handle::current().block_on(tui_lock::lock());
                                 let run_now = dialoguer::Confirm::new()
                                     .with_prompt(format!(
                                         "Device '{}' ({}) is set to AskEachTime. Run a backup now?",
@@ -361,10 +355,8 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 if run_now {
                                     tokio::spawn(async move {
                                         if let Some(dev_conf) =
-                                            crate::handler::trigger_backup_by_uuid(
-                                                vid, pid, &uuid,
-                                            )
-                                            .await
+                                            crate::handler::trigger_backup_by_uuid(vid, pid, &uuid)
+                                                .await
                                         {
                                             info!("Backup finished for {}", dev_conf.name);
                                         }
@@ -389,13 +381,8 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         let product_clone = product.clone();
                         let uuid_clone = uuid.clone();
                         tokio::spawn(async move {
-                            handle_new_device_interactive(
-                                vid,
-                                pid,
-                                &product_clone,
-                                &uuid_clone,
-                            )
-                            .await;
+                            handle_new_device_interactive(vid, pid, &product_clone, &uuid_clone)
+                                .await;
                         });
                     } else {
                         // New device without a TTY: record as pending + notify
