@@ -437,8 +437,8 @@ mod tests {
     fn identical_file_is_all_copy() {
         let dir = tempdir().unwrap();
         let content = vec![7u8; 32 * 1024];
-        let base = write(&dir.path().to_path_buf(), "base", &content);
-        let src = write(&dir.path().to_path_buf(), "src", &content);
+        let base = write(dir.path(), "base", &content);
+        let src = write(dir.path(), "src", &content);
 
         let bs = 1024;
         let table = build_block_table(&base, bs).unwrap();

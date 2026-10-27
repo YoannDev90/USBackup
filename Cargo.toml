@@ -44,6 +44,11 @@ sync-engine = []
 
 [dev-dependencies]
 tempfile = "3"
+criterion = "0.5"
+
+[[bench]]
+name = "sync_engine"
+harness = false
 
 [profile.release]
 lto = true

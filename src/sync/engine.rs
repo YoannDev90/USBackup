@@ -654,10 +654,12 @@ mod tests {
 
         let seen: Arc<std::sync::Mutex<Vec<Progress>>> = Arc::new(std::sync::Mutex::new(vec![]));
         let sink = Arc::clone(&seen);
-        let mut engine = SyncEngine::default();
-        engine.progress = Some(Box::new(move |p| {
-            sink.lock().unwrap().push(p.clone());
-        }));
+        let engine = SyncEngine {
+            progress: Some(Box::new(move |p| {
+                sink.lock().unwrap().push(p.clone());
+            })),
+            ..SyncEngine::default()
+        };
 
         engine.run(&src, &dst, false).unwrap();
 

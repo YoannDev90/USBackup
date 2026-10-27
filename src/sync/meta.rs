@@ -234,6 +234,7 @@ mod tests {
         let f = dir.path().join("open.txt");
         let mut h = OpenOptions::new()
             .create(true)
+            .truncate(true)
             .write(true)
             .open(&f)
             .unwrap();
