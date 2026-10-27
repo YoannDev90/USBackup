@@ -38,7 +38,7 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Build the temp path for `dst`: a sibling in the same directory so the final
 /// `rename` stays on one filesystem (a requirement for atomicity).
-fn temp_path(dst: &Path) -> PathBuf {
+pub(crate) fn temp_path(dst: &Path) -> PathBuf {
     let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let file_name = dst
         .file_name()
