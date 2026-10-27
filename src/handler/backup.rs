@@ -14,6 +14,12 @@ use sysinfo::Disks;
 #[cfg(not(feature = "sync-engine"))]
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command as TokioCommand;
+// Named only by the sync-engine path (run_engine_sync); gated with it so the
+// default rsync build stays warning-free.
+#[cfg(feature = "sync-engine")]
+use crate::models::device::BackupRule;
+#[cfg(feature = "sync-engine")]
+use crate::sync::SyncError;
 
 // Keep this public if you plan to call it elsewhere,
 // otherwise mark it allowed or remove it.
@@ -456,17 +462,6 @@ async fn inner_trigger_backup(
             }
             #[cfg(feature = "sync-engine")]
             {
-                use crate::sync::filter::Filter;
-                use crate::sync::{RetentionPolicy, SnapshotStore, SyncEngine};
-
-                // Exclusions: the rule's explicit patterns plus a local
-                // .gitignore, mirroring rsync's --exclude / --exclude-from.
-                let mut filter_builder = Filter::builder().add_patterns(&rule.exclude);
-                if let Ok(gi_path) = find_local_gitignore(&rule.source_path) {
-                    filter_builder = filter_builder.add_gitignore(&gi_path);
-                }
-                let filter = filter_builder.build();
-
                 let pb = ProgressBar::new(100);
                 pb.set_style(
                     ProgressStyle::with_template(
@@ -483,48 +478,13 @@ async fn inner_trigger_backup(
                         .to_string_lossy()
                 ));
 
-                let src = Path::new(&rule.source_path).to_path_buf();
-                let prune = rule.delete_missing;
-                let incremental = rule.incremental;
-                let pb_progress = pb.clone();
-
                 // The engine is synchronous (blocking I/O): run it off the async
                 // executor with spawn_blocking, the pattern main.rs already uses.
+                let rule_owned = rule.clone();
+                let dest = full_dest.clone();
+                let pb_progress = pb.clone();
                 let join = tokio::task::spawn_blocking(move || {
-                    if incremental {
-                        let store = SnapshotStore::new(&full_dest);
-                        store
-                            .create_snapshot(&src, &RetentionPolicy::default())
-                            .map(|r| {
-                                format!(
-                                    "snapshot {}: {} copied, {} linked, {} symlinks preserved",
-                                    r.dir_name,
-                                    r.stats.files_copied,
-                                    r.stats.files_linked,
-                                    r.stats.symlinks_preserved
-                                )
-                            })
-                    } else {
-                        let engine = SyncEngine {
-                            exclude: filter,
-                            progress: Some(Box::new(move |p| {
-                                pb_progress.set_position(
-                                    p.bytes_done.saturating_mul(100) / p.bytes_total.max(1),
-                                );
-                                pb_progress.set_message(format!(
-                                    "{} / {} files",
-                                    p.files_done, p.files_total
-                                ));
-                            })),
-                            ..SyncEngine::default()
-                        };
-                        engine.run(&src, &full_dest, prune).map(|s| {
-                            format!(
-                                "{} copied, {} removed, {} symlinks preserved ({} errors)",
-                                s.files_copied, s.files_removed, s.symlinks_preserved, s.errors
-                            )
-                        })
-                    }
+                    run_engine_sync(&rule_owned, &dest, pb_progress)
                 })
                 .await;
                 pb.finish_and_clear();
@@ -672,6 +632,64 @@ async fn run_post_backup_script(script: &str, source: &str, device_name: &str) -
     }
 }
 
+/// Run one rule's engine sync on a blocking thread: build the exclusion
+/// filter (the rule's `--exclude` patterns plus a local `.gitignore`, the
+/// counterpart of rsync's `--exclude`/`--exclude-from`), then either create
+/// an incremental snapshot or run a plain sync, reporting progress to
+/// `progress`. Returns a human-readable summary.
+///
+/// Extracted from the backup flow so the exact composition backup.rs runs can
+/// be exercised end-to-end in a test (`engine_e2e` below).
+#[cfg(feature = "sync-engine")]
+fn run_engine_sync(
+    rule: &BackupRule,
+    dest: &Path,
+    progress: ProgressBar,
+) -> Result<String, SyncError> {
+    use crate::sync::filter::Filter;
+    use crate::sync::{RetentionPolicy, SnapshotStore, SyncEngine};
+
+    let mut filter_builder = Filter::builder().add_patterns(&rule.exclude);
+    if let Ok(gi_path) = find_local_gitignore(&rule.source_path) {
+        filter_builder = filter_builder.add_gitignore(&gi_path);
+    }
+    let filter = filter_builder.build();
+
+    let src = Path::new(&rule.source_path);
+    if rule.incremental {
+        // The filter must reach the store: without it an incremental backup
+        // would ignore --exclude/.gitignore, while rsync's --link-dest path
+        // honours them. This keeps the two paths' exclusions in parity.
+        let store = SnapshotStore::new(dest).with_filter(filter);
+        store
+            .create_snapshot(src, &RetentionPolicy::default())
+            .map(|r| {
+                format!(
+                    "snapshot {}: {} copied, {} linked, {} symlinks preserved",
+                    r.dir_name,
+                    r.stats.files_copied,
+                    r.stats.files_linked,
+                    r.stats.symlinks_preserved
+                )
+            })
+    } else {
+        let engine = SyncEngine {
+            exclude: filter,
+            progress: Some(Box::new(move |p| {
+                progress.set_position(p.bytes_done.saturating_mul(100) / p.bytes_total.max(1));
+                progress.set_message(format!("{} / {} files", p.files_done, p.files_total));
+            })),
+            ..SyncEngine::default()
+        };
+        engine.run(src, dest, rule.delete_missing).map(|s| {
+            format!(
+                "{} copied, {} removed, {} symlinks preserved ({} errors)",
+                s.files_copied, s.files_removed, s.symlinks_preserved, s.errors
+            )
+        })
+    }
+}
+
 fn find_local_gitignore(source_path: &str) -> Result<std::path::PathBuf, std::io::Error> {
     let source = Path::new(source_path);
     let gitignore = source.join(".gitignore");
@@ -718,5 +736,79 @@ mod tests {
     fn sanitize_keeps_relative_paths() {
         assert_eq!(sanitize_dest("backups/my_pc"), "backups/my_pc");
         assert_eq!(sanitize_dest("a..b"), "a__b"); // even mid-name, conservative
+    }
+}
+
+/// End-to-end backup flow through the sync engine — the exact composition
+/// `run_backup` runs when the `sync-engine` feature is on. A tempdir stands in
+/// for the USB mount point; the engine writes the same layout it would on the
+/// key. Proves `--exclude`/`.gitignore` are honoured on both the plain and the
+/// incremental (snapshot) path.
+#[cfg(all(test, feature = "sync-engine"))]
+mod engine_e2e {
+    use super::run_engine_sync;
+    use crate::models::device::BackupRule;
+    use crate::sync::SnapshotStore;
+    use indicatif::ProgressBar;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use tempfile::tempdir;
+
+    /// A source tree with a local `.gitignore` excluding `dist/`, plus the
+    /// rule backup.rs would build for it.
+    fn setup(dir: &Path, incremental: bool) -> (BackupRule, PathBuf) {
+        let src = dir.join("src");
+        let dst = dir.join("dst");
+        fs::create_dir_all(src.join("dist")).unwrap();
+        fs::write(src.join("keep.txt"), b"keep").unwrap();
+        fs::write(src.join("dist/out.js"), b"excluded").unwrap();
+        fs::write(src.join(".gitignore"), b"dist/\n").unwrap();
+
+        let rule = BackupRule {
+            source_path: src.to_string_lossy().into_owned(),
+            destination_path: "dst".into(),
+            exclude: vec![],
+            delete_missing: true,
+            incremental,
+            post_backup_script: None,
+            unmount_after: false,
+        };
+        (rule, dst)
+    }
+
+    #[test]
+    fn plain_sync_honours_local_gitignore() {
+        let dir = tempdir().unwrap();
+        let (rule, dst) = setup(dir.path(), false);
+
+        run_engine_sync(&rule, &dst, ProgressBar::hidden()).expect("sync succeeds");
+
+        assert_eq!(fs::read(dst.join("keep.txt")).unwrap(), b"keep");
+        assert!(
+            !dst.join("dist").exists(),
+            "gitignored tree must not be copied"
+        );
+        assert!(!dst.join("dist/out.js").exists());
+    }
+
+    #[test]
+    fn incremental_snapshot_honours_local_gitignore() {
+        let dir = tempdir().unwrap();
+        let (rule, dst) = setup(dir.path(), true);
+
+        run_engine_sync(&rule, &dst, ProgressBar::hidden()).expect("snapshot succeeds");
+
+        // The snapshot lives under dst/backups/<dir>/; the manifest names it.
+        let store = SnapshotStore::new(&dst);
+        let manifest = store.load().expect("manifest written");
+        assert_eq!(manifest.snapshots.len(), 1, "one snapshot created");
+        let snap = store.backups_dir.join(&manifest.snapshots[0].dir_name);
+
+        assert_eq!(fs::read(snap.join("keep.txt")).unwrap(), b"keep");
+        assert!(
+            !snap.join("dist").exists(),
+            "gitignored tree must not be snapshotted"
+        );
+        assert!(!snap.join("dist/out.js").exists());
     }
 }

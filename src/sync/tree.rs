@@ -68,6 +68,16 @@ impl TreeIndex {
     pub(crate) fn insert(&mut self, meta: EntryMeta) {
         self.entries.insert(meta.rel_path.clone(), meta);
     }
+
+    /// Keep only entries for which `keep` returns true, dropping the rest.
+    /// Used to remove excluded entries from a scan before building a plan, so
+    /// a snapshot or sync never materializes something filtered out.
+    pub fn retain<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&EntryMeta) -> bool,
+    {
+        self.entries.retain(|_, meta| keep(meta));
+    }
 }
 
 /// Scan `root` and build a [`TreeIndex`].

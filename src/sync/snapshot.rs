@@ -47,6 +47,7 @@
 use crate::sync::compare::{classify, Action, PlanItem, Verdict};
 use crate::sync::engine::SyncEngine;
 use crate::sync::error::{Result, SyncError};
+use crate::sync::filter::Filter;
 use crate::sync::progress::Stats;
 use crate::sync::tree::{scan, TreeIndex};
 use chrono::{DateTime, Utc};
@@ -129,6 +130,10 @@ pub struct SnapshotStore {
     pub backups_dir: PathBuf,
     /// Path of `snapshots.json`.
     pub manifest_path: PathBuf,
+    /// Exclusions applied to every snapshot this store creates (the rule's
+    /// `--exclude` patterns plus a local `.gitignore`). [`Filter::none`] means
+    /// "copy everything", the behaviour before this field existed.
+    filter: Filter,
 }
 
 impl SnapshotStore {
@@ -139,7 +144,16 @@ impl SnapshotStore {
         SnapshotStore {
             backups_dir: root.join(BACKUPS_DIR),
             manifest_path: root.join(MANIFEST_DIR).join(MANIFEST_FILE),
+            filter: Filter::none(),
         }
+    }
+
+    /// Set the exclusions applied to snapshots this store creates. Without
+    /// this, an incremental backup would ignore `--exclude`/`.gitignore` and
+    /// snapshot files a filtered rsync would have skipped.
+    pub fn with_filter(mut self, filter: Filter) -> Self {
+        self.filter = filter;
+        self
     }
 
     /// Read the manifest; a missing file is a fresh, empty manifest.
@@ -219,7 +233,12 @@ impl SnapshotStore {
             .map(|e| self.backups_dir.join(&e.dir_name))
             .filter(|p| p.is_dir());
 
-        let src_index = scan(src_root)?;
+        let mut src_index = scan(src_root)?;
+        // Drop excluded entries (the rule's --exclude patterns and .gitignore)
+        // so a snapshot mirrors what a filtered rsync incremental would copy.
+        // Filtering the index -- not the plan -- keeps the manifest's
+        // files/bytes counts below describing the snapshot's real content.
+        src_index.retain(|meta| !self.filter.is_excluded_deep(&meta.rel_path, meta.is_dir));
         let base_index = match &base_dir {
             Some(d) => scan(d)?,
             None => TreeIndex::default(),
@@ -387,6 +406,37 @@ mod tests {
             .join(&report.dir_name)
             .join("docs/a.txt")
             .exists());
+    }
+
+    #[test]
+    fn snapshot_honors_exclusions() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("src");
+        seed(&src).unwrap();
+        // A tree the filter will drop.
+        fs::create_dir_all(src.join("dist")).unwrap();
+        fs::write(src.join("dist/out.js"), b"bundle").unwrap();
+
+        let filter = Filter::builder().add_pattern("dist/").build();
+        let store = SnapshotStore::new(dir.path()).with_filter(filter);
+
+        let report = store
+            .create_snapshot(&src, &RetentionPolicy::default())
+            .unwrap();
+
+        let snap = store.backups_dir.join(&report.dir_name);
+        // Kept files land in the snapshot...
+        assert!(snap.join("docs/a.txt").exists());
+        assert!(snap.join("root.txt").exists());
+        // ...the excluded tree never does.
+        assert!(!snap.join("dist").exists());
+        assert!(!snap.join("dist/out.js").exists());
+
+        // The manifest describes the snapshot's real content: 4 kept entries
+        // (docs/a.txt, docs/b.txt, root.txt + the docs/link symlink), not 5 --
+        // the filtered-out dist/out.js is not counted.
+        let manifest = store.load().unwrap();
+        assert_eq!(manifest.snapshots[0].files, 4);
     }
 
     #[test]
