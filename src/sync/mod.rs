@@ -19,6 +19,7 @@
 // allows everywhere.
 #![allow(dead_code, unused_imports)]
 
+pub mod chunk;
 pub mod compare;
 pub mod compress;
 pub mod copy;
@@ -34,6 +35,7 @@ pub mod sparse;
 pub mod tree;
 
 // Re-exports for the public surface of the engine.
+pub use chunk::{chunk_data, CdcBase, Chunking};
 pub use compare::{compare, Action, PlanItem};
 pub use compress::{compress, decompress, Compression};
 pub use copy::{copy_file_atomic, is_temp_file};
