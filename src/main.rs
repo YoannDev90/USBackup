@@ -4,6 +4,7 @@ mod handler;
 mod models;
 mod notifications;
 mod storage;
+mod sync;
 mod tui_lock;
 
 use crate::storage::{load_config, PendingDevice};
