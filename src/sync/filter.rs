@@ -150,6 +150,34 @@ impl Filter {
     pub fn is_excluded(&self, rel_path: &Path, is_dir: bool) -> bool {
         self.excluded(rel_path, is_dir).is_some()
     }
+
+    /// Should this entry be **skipped**, accounting for the fact that excluding
+    /// a directory excludes everything beneath it?
+    ///
+    /// [`Filter::excluded`] matches a single path against the rules, which is
+    /// the right primitive for "is *this* path named by a rule". But gitignore
+    /// semantics say `dist/` also excludes `dist/out.js`, and that you **cannot
+    /// re-include** a file whose parent directory is excluded. This method adds
+    /// that ancestor pass, so it is the predicate to use when filtering a scan
+    /// or a sync plan — otherwise an excluded tree's children would be copied
+    /// file-by-file.
+    pub fn is_excluded_deep(&self, rel_path: &Path, is_dir: bool) -> bool {
+        if self.excluded(rel_path, is_dir).is_some() {
+            return true;
+        }
+        // An excluded ancestor directory wins over any `!` re-inclusion of this
+        // path (gitignore forbids re-including under an excluded parent).
+        self.has_excluded_ancestor(rel_path)
+    }
+
+    /// True when any ancestor directory of `rel_path` is excluded.
+    fn has_excluded_ancestor(&self, rel_path: &Path) -> bool {
+        rel_path
+            .ancestors()
+            .skip(1) // the path itself is handled by `excluded`
+            .take_while(|a| !a.as_os_str().is_empty()) // stop at the root
+            .any(|anc| self.excluded(anc, true).is_some())
+    }
 }
 
 #[cfg(test)]
@@ -210,6 +238,44 @@ mod tests {
             .add_gitignore("/nonexistent/.gitignore")
             .build();
         assert!(!f.is_excluded(Path::new("anything"), false));
+    }
+
+    #[test]
+    fn child_of_excluded_dir_is_excluded() {
+        // A dir-only pattern must exclude the directory's contents too, not
+        // just the directory entry -- plan filtering relies on this so an
+        // excluded tree is never copied file-by-file.
+        let f = Filter::builder().add_pattern("dist/").build();
+        assert!(f.is_excluded_deep(Path::new("dist"), true));
+        assert!(f.is_excluded_deep(Path::new("dist/out.js"), false));
+        assert!(f.is_excluded_deep(Path::new("dist/deep/nested/file.js"), false));
+        assert!(!f.is_excluded_deep(Path::new("src/lib.js"), false));
+        // The single-path primitive does NOT match descendants (it reports only
+        // what names the path directly); that's what `is_excluded_deep` adds.
+        assert!(!f.is_excluded(Path::new("dist/out.js"), false));
+    }
+
+    #[test]
+    fn reinclude_under_excluded_parent_stays_excluded() {
+        // gitignore forbids re-including a file whose parent directory is
+        // excluded, so `!dist/keep.txt` must NOT rescue it from `dist/`.
+        let f = Filter::builder()
+            .add_pattern("dist/")
+            .add_pattern("!dist/keep.txt")
+            .build();
+        assert!(f.is_excluded_deep(Path::new("dist/keep.txt"), false));
+    }
+
+    #[test]
+    fn reinclude_with_no_excluded_parent_wins() {
+        // A plain `!` re-inclusion with no excluded ancestor must succeed.
+        let f = Filter::builder()
+            .add_pattern("*.log")
+            .add_pattern("!important.log")
+            .build();
+        assert!(!f.is_excluded_deep(Path::new("important.log"), false));
+        assert!(!f.is_excluded_deep(Path::new("sub/important.log"), false));
+        assert!(f.is_excluded_deep(Path::new("other.log"), false));
     }
 
     #[test]

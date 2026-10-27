@@ -45,6 +45,7 @@
 use crate::sync::compare::{compare, Action, PlanItem};
 use crate::sync::copy::copy_file_atomic;
 use crate::sync::error::{Result, SyncError};
+use crate::sync::filter::Filter;
 use crate::sync::link::{link_or_copy, LinkOutcome};
 use crate::sync::progress::{Progress, Stats};
 use crate::sync::symlink::{create_symlink, recreate_symlink};
@@ -109,6 +110,10 @@ pub struct SyncEngine {
     /// from. Set by the snapshot layer; `None` for a normal sync (in which case
     /// a stray `LinkOrCopy` degrades to a copy).
     pub base_root: Option<PathBuf>,
+    /// Exclusion rules (explicit patterns + `.gitignore`). Entries whose path
+    /// or any ancestor directory matches are dropped from the plan, so an
+    /// excluded tree is neither copied nor pruned. [`Filter::none`] by default.
+    pub exclude: Filter,
     /// Cooperative cancellation flag; when set, pending items are skipped.
     pub cancel: Arc<AtomicBool>,
 }
@@ -122,6 +127,7 @@ impl Default for SyncEngine {
             bulk_threshold: DEFAULT_BULK_THRESHOLD,
             progress: None,
             base_root: None,
+            exclude: Filter::none(),
             cancel: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -158,6 +164,11 @@ impl SyncEngine {
     /// A missing destination is normal on the first run and is treated as an
     /// empty index (everything is new). A missing source is a real error — there
     /// is nothing to back up from.
+    ///
+    /// Entries matching [`self.exclude`] (path **or** any ancestor directory)
+    /// are dropped: excluded files are never copied, and with `prune` an
+    /// excluded destination-only entry is never removed — matching rsync's
+    /// behaviour of protecting excluded files on the receiver.
     pub fn plan(&self, src_root: &Path, dst_root: &Path, prune: bool) -> Result<Vec<PlanItem>> {
         let src_index = scan(src_root)?;
         let dst_index = if dst_root.exists() {
@@ -165,7 +176,13 @@ impl SyncEngine {
         } else {
             TreeIndex::default()
         };
-        Ok(compare(&src_index, &dst_index, prune))
+        let mut plan = compare(&src_index, &dst_index, prune);
+        plan.retain(|item| {
+            !self
+                .exclude
+                .is_excluded_deep(&item.rel_path, item.meta.is_dir)
+        });
+        Ok(plan)
     }
 
     /// Full pipeline: plan, order, execute, return stats (§6.3).
@@ -659,6 +676,76 @@ mod tests {
             .execute(dir.path(), dir.path(), &[])
             .unwrap();
         assert_eq!(stats.files_copied, 0);
+        assert_eq!(stats.errors, 0);
+    }
+
+    #[test]
+    fn excluded_file_and_tree_are_not_copied() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("src");
+        let dst = dir.path().join("dst");
+        fs::create_dir_all(src.join("keep")).unwrap();
+        fs::create_dir_all(src.join("dist")).unwrap();
+        fs::write(src.join("keep/data.txt"), b"keep me").unwrap();
+        fs::write(src.join("dist/out.js"), b"skip me").unwrap();
+        fs::write(src.join("dist/deep/nested.js"), {
+            fs::create_dir_all(src.join("dist/deep")).unwrap();
+            b"skip nested"
+        })
+        .unwrap();
+        fs::write(src.join("build.log"), b"skip log").unwrap();
+
+        let engine = SyncEngine {
+            exclude: crate::sync::filter::Filter::builder()
+                .add_pattern("dist/")
+                .add_pattern("*.log")
+                .build(),
+            ..SyncEngine::default()
+        };
+
+        let stats = engine.run(&src, &dst, false).unwrap();
+
+        assert!(dst.join("keep/data.txt").exists(), "kept file is copied");
+        assert!(
+            !dst.join("dist").exists(),
+            "excluded dir tree must not be copied"
+        );
+        assert!(!dst.join("build.log").exists(), "excluded file not copied");
+        assert_eq!(stats.errors, 0);
+    }
+
+    #[test]
+    fn prune_does_not_remove_excluded_destination_entries() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("src");
+        let dst = dir.path().join("dst");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("src.txt"), b"source").unwrap();
+
+        let engine = SyncEngine {
+            exclude: crate::sync::filter::Filter::builder()
+                .add_pattern("logs/")
+                .build(),
+            ..SyncEngine::default()
+        };
+
+        // First run with no exclusion to seed the destination.
+        engine.run(&src, &dst, false).unwrap();
+
+        // Destination-only entries: one excluded, one not.
+        fs::create_dir_all(dst.join("logs")).unwrap();
+        fs::write(dst.join("logs/app.log"), b"excluded orphan").unwrap();
+        fs::write(dst.join("orphan.txt"), b"normal orphan").unwrap();
+
+        let stats = engine.run(&src, &dst, true).unwrap();
+
+        // rsync protects excluded files on the receiver: the excluded orphan
+        // survives prune, the normal one is removed.
+        assert!(
+            dst.join("logs/app.log").exists(),
+            "excluded destination file must survive prune"
+        );
+        assert!(!dst.join("orphan.txt").exists(), "normal orphan pruned");
         assert_eq!(stats.errors, 0);
     }
 
