@@ -3,6 +3,29 @@
 All notable changes to this project are documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Pure-Rust sync engine** — an in-process, portable alternative to the
+  external `rsync` binary, gated behind the `sync-engine` cargo feature.
+  Off by default: `rsync` remains the shipped backend until the engine is
+  validated end-to-end on Linux, macOS and Windows.
+  - Metadata-only change detection (mtime + size, 2 s FAT tolerance) with
+    per-rule excludes, bundled defaults and `.gitignore` — honored on
+    incremental snapshots too.
+  - Atomic copy (temp file + rename) preserving mtime and permissions;
+    symlinks are kept as-is, never dereferenced.
+  - Bounded parallel execution with separate metadata and bulk-I/O pools.
+  - Incremental hard-link snapshots with retention, or a plain mirror.
+  - Optional delta transfer (Rabin-Karp rolling hash) for large files,
+    off by default.
+  - No `unsafe`, no C toolchain — cross-compiles to Linux, macOS, Windows.
+- **Criterion benchmark suite** (`benches/sync_engine.rs`) covering scan
+  throughput, cold/noop sync at 10 k and 100 k files, snapshot linking, and
+  the pool-size sweeps behind the default tuning (metadata 8, bulk 2,
+  1 MiB bulk threshold).
+
 ## [0.1.0] — 2026-10-15
 
 First stable feature release after the v0.0.x experimental series. Focus on
@@ -104,6 +127,7 @@ correctness, security hardening, headless operation, and a proper CLI.
 - Interactive device whitelisting wizard.
 - Post-backup actions (script / unmount).
 
+[Unreleased]: https://github.com/YoannDev90/USBackup/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/YoannDev90/USBackup/compare/v0.0.2...v0.1.0
 [0.0.2]: https://github.com/YoannDev90/USBackup/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/YoannDev90/USBackup/compare/v0.0.0...v0.0.1
