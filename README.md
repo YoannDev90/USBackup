@@ -1,5 +1,7 @@
 # USBackup
 
+<p align="center"><img src="assets/logo/wordmark.svg" alt="USBackup" width="320"></p>
+
 Automated USB backup agent written in Rust. Runs in the background, detects USB keys the instant they are plugged in, and runs signed `rsync` backups from your machine to the key.
 
 ```
@@ -10,13 +12,17 @@ $ usbackup
 [✓] Backup finished for SanDisk Ultra
 ```
 
+## Name
+
+**USBackup** is a contraction of **USB** + **Backup**: the medium you plug in, and the job it does. The name is pronounced "USB-backup" (*you-es-bee-backup*), written as one word with camel case to keep both halves readable.
+
 ## Features
 
 - **Hotplug detection** — native USB events via `nusb`, no polling.
 - **Zero-trust config** — backup rules live *on the key* (`.usbackup.toml`) and are HMAC-SHA256 signed with a per-machine secret; a tampered or foreign config is rejected outright.
 - **UUID + VID/PID identification** — each key is matched by filesystem UUID *and* the vendor/product IDs of the device that triggered the event, so a second plugged-in key is never misidentified.
 - **Three device actions** — `Whitelist` (auto-backup), `AskEachTime` (confirm each plug-in), `IgnoreForever` (skip silently).
-- **Incremental snapshots** — `rsync --link-dest` hard-link versioning with a `latest` symlink; minimal disk usage, full history.
+- **Incremental snapshots** — `rsync --link-dest` hard-link versioning with a `latest` symlink; minimal disk usage, full history. Disabled on Windows (see [Windows notes](#windows-notes)).
 - **Auto-mount / unmount** — `udisksctl` mount on detection, optional unmount after a successful backup (resolved to the real block device node).
 - **Smart exclusions** — per-rule excludes, bundled defaults, optional `.gitignore` templates fetched from GitHub, and local `.gitignore` detection.
 - **Headless-safe** — under systemd (no TTY) unknown devices are queued as *pending* and a desktop notification tells you to run `usbackup approve <uuid>`.
@@ -31,7 +37,7 @@ $ usbackup
 | OS | Status | Notes |
 | :-- | :-- | :-- |
 | **Linux** | ✅ | Native `udev` + `udisksctl`. Releases ship amd64 and arm64 binaries. |
-| **Windows** | ❌ | Fork + PR welcome. |
+| **Windows** | ✅ | WMI discovery + native auto-mount, Task Scheduler service, `incremental` off (see [Windows notes](#windows-notes)). Releases ship x64 and arm64 `.exe`. |
 | **macOS** | ❌ | Fork + PR welcome. |
 
 ## Installation
@@ -44,6 +50,11 @@ $ usbackup
 | Fedora / RHEL | `sudo dnf install libudev-devel pkg-config rsync` |
 
 `udisksctl` (part of `udisks2`) is also required at runtime.
+
+### Requirements (Windows)
+
+- **rsync** — a native MSVC build such as [nuket/rsync-windows](https://github.com/nuket/rsync-windows) (x64 / arm64), present on `PATH` as `rsync`.
+- Nothing else: Windows mounts removable drives by itself, so there is no `udisksctl` equivalent to install.
 
 ### Quick install (curl)
 
@@ -66,6 +77,14 @@ curl -fsSL ... | bash -s -- --force                  # overwrite existing binary
 
 </details>
 
+### Quick install (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/YoannDev90/USBackup/master/install.ps1 | iex
+```
+
+The script resolves the latest release, verifies its SHA256 checksum, installs the binary to `%LOCALAPPDATA%\Programs\USBackup`, and offers to register the scheduled task — the same flow as `install.sh`. Saved to disk it also accepts `-Prefix`, `-Version`, `-NoService` and `-Force`.
+
 ### Build from source
 
 ```bash
@@ -79,10 +98,36 @@ Or grab a prebuilt binary from the [Releases](https://github.com/YoannDev90/USBa
 
 ### Run as a user service
 
+**Linux (systemd user service):**
+
 ```bash
 usbackup --install-service
 systemctl --user start usbackup.service
 ```
+
+**Windows (Task Scheduler, runs at logon):**
+
+```powershell
+USBackup.exe --install-service
+schtasks /Run /TN USBackup
+```
+
+The task runs in your interactive session (not Session 0), so toast
+notifications and `%APPDATA%` access keep working.
+
+### Windows notes
+
+- **Discovery & mounting** — devices come from WMI (`Win32_DiskDrive` joined
+  to `Win32_LogicalDisk` by volume serial); Windows mounts removable drives
+  itself, so there is no `udisksctl` step.
+- **Incremental snapshots are off** — the native
+  [nuket/rsync-windows](https://github.com/nuket/rsync-windows) port cannot
+  create the hard links `--link-dest` relies on, so `incremental` is forced
+  to `false` at backup time (a warning is logged when a key asks for it) and
+  every backup runs as a plain mirror: no `latest` link, no snapshot history.
+  Linux keeps both.
+- **SmartScreen** — release `.exe` files are not code-signed yet; SmartScreen
+  may prompt on first launch ("More info" → "Run anyway").
 
 ## Quick start
 

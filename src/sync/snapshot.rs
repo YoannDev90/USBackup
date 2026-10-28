@@ -382,6 +382,10 @@ mod tests {
         fs::write(root.join("docs/a.txt"), b"alpha")?;
         fs::write(root.join("docs/b.txt"), b"beta")?;
         fs::write(root.join("root.txt"), b"top")?;
+        // Seeded on unix only: creating a symlink needs a privilege CI may
+        // lack on Windows, so the symlink-specific assertions below are
+        // unix-gated too. Windows still exercises plain files, directories
+        // and exclusions.
         #[cfg(unix)]
         std::os::unix::fs::symlink("docs/a.txt", root.join("docs/link"))?;
         Ok(())
@@ -432,11 +436,15 @@ mod tests {
         assert!(!snap.join("dist").exists());
         assert!(!snap.join("dist/out.js").exists());
 
-        // The manifest describes the snapshot's real content: 4 kept entries
-        // (docs/a.txt, docs/b.txt, root.txt + the docs/link symlink), not 5 --
-        // the filtered-out dist/out.js is not counted.
         let manifest = store.load().unwrap();
+        // The manifest describes the snapshot's real content: every kept
+        // entry — docs/a.txt, docs/b.txt, root.txt plus the docs/link
+        // symlink when seed created one (unix) — and never the filtered-out
+        // dist/out.js.
+        #[cfg(unix)]
         assert_eq!(manifest.snapshots[0].files, 4);
+        #[cfg(windows)]
+        assert_eq!(manifest.snapshots[0].files, 3);
     }
 
     #[test]
@@ -447,7 +455,9 @@ mod tests {
         let store = SnapshotStore::new(dir.path());
         let policy = RetentionPolicy::default();
 
-        let first = store.create_snapshot(&src, &policy).unwrap();
+        // `first` is only read by the unix inode assertion below; the
+        // snapshot itself must exist on every platform either way.
+        let _first = store.create_snapshot(&src, &policy).unwrap();
         let second = store.create_snapshot(&src, &policy).unwrap();
 
         // Nothing changed: every regular file is linked, none recopied.
@@ -459,7 +469,7 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            let a1 = store.backups_dir.join(&first.dir_name).join("docs/a.txt");
+            let a1 = store.backups_dir.join(&_first.dir_name).join("docs/a.txt");
             let a2 = store.backups_dir.join(&second.dir_name).join("docs/a.txt");
             assert_eq!(
                 fs::metadata(&a1).unwrap().ino(),
@@ -499,6 +509,8 @@ mod tests {
         );
     }
 
+    // Needs a real symlink in the seeded tree (seed creates one on unix only).
+    #[cfg(unix)]
     #[test]
     fn symlink_is_preserved_as_a_link_in_snapshot() {
         let dir = tempdir().unwrap();
@@ -681,8 +693,10 @@ mod tests {
             .filter(|p| p.action == Action::LinkOrCopy)
             .count();
         assert_eq!(links, 3, "identical base -> all files linked");
-        // Dirs still CreateDir, symlink still Symlink regardless of base.
+        // Dirs still CreateDir, symlink still Symlink regardless of base
+        // (the symlink entry only exists when seed created one — unix).
         assert!(plan2.iter().any(|p| p.action == Action::CreateDir));
+        #[cfg(unix)]
         assert!(plan2.iter().any(|p| p.action == Action::Symlink));
     }
 }

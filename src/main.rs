@@ -4,6 +4,7 @@ mod device;
 mod handler;
 mod models;
 mod notifications;
+mod service;
 mod storage;
 mod sync;
 mod tui_lock;
@@ -11,7 +12,6 @@ mod tui_lock;
 use crate::storage::{load_config, PendingDevice};
 use log::{debug, error, info, warn};
 use std::io::IsTerminal;
-use std::process::Command;
 
 const USAGE: &str = "\
 USBackup - automated USB backup agent
@@ -26,7 +26,7 @@ Commands (default = daemon):
                             runs the interactive backup wizard
   list-devices              List approved / ask-each-time / ignored /
                             pending devices
-  --install-service         Install and enable the systemd user service
+  --install-service         Install and enable the background service
   --help, -h                Show this help
   --version, -V             Show version
 
@@ -53,55 +53,48 @@ fn command_in_path(cmd: &str) -> bool {
     std::env::var_os("PATH")
         .map(|paths| {
             std::env::split_paths(&paths).any(|dir| {
-                let candidate = dir.join(cmd);
-                candidate.is_file()
+                candidate_commands(&dir, cmd)
+                    .iter()
+                    .any(|candidate| candidate.is_file())
             })
         })
         .unwrap_or(false)
 }
 
+/// Candidate file names for `cmd` inside `dir`. Windows resolves bare
+/// names through PATHEXT (`.COM`, `.EXE`, ...), so `rsync` only matches
+/// there if the extension is appended by hand.
+#[cfg(windows)]
+fn candidate_commands(dir: &std::path::Path, cmd: &str) -> Vec<std::path::PathBuf> {
+    let mut names = vec![dir.join(cmd)];
+    let pathext =
+        std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+    for ext in pathext.split(';').filter(|ext| !ext.is_empty()) {
+        names.push(dir.join(format!("{}{}", cmd, ext)));
+    }
+    names
+}
+
+#[cfg(not(windows))]
+fn candidate_commands(dir: &std::path::Path, cmd: &str) -> Vec<std::path::PathBuf> {
+    vec![dir.join(cmd)]
+}
+
 fn check_dependencies() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Windows mounts USB keys through the OS (auto-mount); there is no
+    // udisksctl equivalent to require there.
+    #[cfg(target_os = "linux")]
     let deps = ["rsync", "udisksctl"];
+    #[cfg(target_os = "macos")]
+    let deps = ["rsync", "diskutil"];
+    #[cfg(target_os = "windows")]
+    let deps = ["rsync"];
     for dep in deps {
         if !command_in_path(dep) {
             error!("Missing dependency: {}", dep);
             return Err(format!("The tool '{}' is required but is not installed.", dep).into());
         }
     }
-    Ok(())
-}
-
-fn install_systemd_service() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let home = std::env::var("HOME")?;
-    let exe_path = std::env::current_exe()?;
-    let service_dir = format!("{}/.config/systemd/user", home);
-    let service_path = format!("{}/usbackup.service", service_dir);
-
-    if std::path::Path::new(&service_path).exists() {
-        println!("Service already installed at {}", service_path);
-        return Ok(());
-    }
-
-    info!("Installing systemd user service...");
-    std::fs::create_dir_all(&service_dir)?;
-
-    let template = include_str!("../usbackup.service");
-    let service_content = template.replace("%EXE_PATH%", &exe_path.display().to_string());
-
-    std::fs::write(&service_path, service_content)?;
-
-    Command::new("systemctl")
-        .arg("--user")
-        .arg("daemon-reload")
-        .output()?;
-    Command::new("systemctl")
-        .arg("--user")
-        .arg("enable")
-        .arg("usbackup.service")
-        .output()?;
-
-    println!("Service installed and enabled. Start it with:");
-    println!("  systemctl --user start usbackup.service");
     Ok(())
 }
 
@@ -451,7 +444,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             println!("USBackup {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        Some("--install-service") => install_systemd_service(),
+        Some("--install-service") => service::install(),
         Some("approve") => cmd_approve(&rest[1..]).await,
         Some("list-devices") => {
             cmd_list_devices();

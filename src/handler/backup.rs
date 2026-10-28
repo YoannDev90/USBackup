@@ -133,6 +133,26 @@ async fn inner_trigger_backup(
 ) {
     info!("Preparing backup for {}", device_config.name);
 
+    // Windows: the rsync port cannot create the hard links that
+    // incremental snapshots rely on, so they would silently lose their
+    // deduplication. Clear the flag before any consumer reads it.
+    #[cfg(windows)]
+    let device_config = {
+        let mut config = device_config.clone();
+        for rule in &mut config.backup_rules {
+            if rule.incremental {
+                warn!(
+                    "incremental snapshots are disabled on Windows (hard links unavailable); '{}' runs as a plain mirror",
+                    rule.source_path
+                );
+                rule.incremental = false;
+            }
+        }
+        config
+    };
+    #[cfg(not(windows))]
+    let device_config = device_config;
+
     if device_config.backup_rules.is_empty() {
         warn!(
             "Device '{}' has ZERO backup rules — nothing will be synced. \
@@ -422,7 +442,15 @@ async fn inner_trigger_backup(
                             }
                             // Need the relative path for the symlink to be portable
                             if let Some(snapshot_name) = final_dest.file_name() {
+                                // Windows: directory symlinks need Developer Mode or
+                                // admin rights, so creation is best-effort.
+                                #[cfg(unix)]
                                 let _ = std::os::unix::fs::symlink(snapshot_name, &latest_link);
+                                #[cfg(windows)]
+                                let _ = std::os::windows::fs::symlink_dir(
+                                    snapshot_name,
+                                    &latest_link,
+                                );
                             }
                         }
 
@@ -606,7 +634,12 @@ fn append_to_log(device_name: &str, source: &str, content: &str) {
 /// counts as a backup error. Shared by the rsync and sync-engine paths.
 async fn run_post_backup_script(script: &str, source: &str, device_name: &str) -> bool {
     info!("Running post-backup script: {}", script);
-    match TokioCommand::new("sh").arg("-c").arg(script).output().await {
+    // Free-form user command: sh -c on Unix, cmd /C on Windows.
+    #[cfg(unix)]
+    let (shell, shell_flag) = ("sh", "-c");
+    #[cfg(windows)]
+    let (shell, shell_flag) = ("cmd", "/C");
+    match TokioCommand::new(shell).arg(shell_flag).arg(script).output().await {
         Ok(out) if out.status.success() => {
             info!("Post-backup script succeeded for {}", source);
             true

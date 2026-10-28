@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 96" width="300" height="96" role="img" aria-label="USBackup — wordmark avec trident USB">
+  <!-- Symbole USB officiel (Material Design Icons, Apache-2.0) -->
+  <g transform="translate(26,48) scale(2.17) translate(-11.9,-11.6)" fill="#2563EB">
+    <path d="M15,7V11H16V13H13V5H15L12,1L9,5H11V13H8V10.93C8.7,10.56 9.2,9.85 9.2,9C9.2,7.78 8.21,6.8 7,6.8C5.78,6.8 4.8,7.78 4.8,9C4.8,9.85 5.3,10.56 6,10.93V13A2,2 0 0,0 8,15H11V18.05C10.29,18.41 9.8,19.15 9.8,20A2.2,2.2 0 0,0 12,22.2A2.2,2.2 0 0,0 14.2,20C14.2,19.15 13.71,18.41 13,18.05V15H16A2,2 0 0,0 18,13V11H19V7H15Z"/>
+  </g>
+  <text x="50" y="64" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="46" font-weight="800" letter-spacing="-1"><tspan fill="#2563EB">USB</tspan><tspan fill="#0F172A">ackup</tspan></text>
+</svg>

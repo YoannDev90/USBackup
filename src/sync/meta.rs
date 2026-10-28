@@ -64,9 +64,20 @@ pub fn read_meta(path: &Path) -> io::Result<PreservedMeta> {
 /// Set only the last-modification time of `path`.
 ///
 /// Used by change detection round-trips. Atime is left untouched.
+#[cfg(not(windows))]
 pub fn set_mtime(path: &Path, t: SystemTime) -> io::Result<()> {
     let file = open_for_times(path)?;
     file.set_times(FileTimes::new().set_modified(t))
+}
+
+/// Windows variant: `std` can only open directories for reading there and
+/// `set_times` needs write access, so the std path above can never touch a
+/// directory on Windows. `filetime` opens with `FILE_WRITE_ATTRIBUTES` +
+/// `FILE_FLAG_BACKUP_SEMANTICS` and handles files and directories alike.
+#[cfg(windows)]
+pub fn set_mtime(path: &Path, t: SystemTime) -> io::Result<()> {
+    filetime::set_file_mtime(path, filetime::FileTime::from_system_time(t))
+        .map_err(io::Error::other)
 }
 
 /// Apply `meta` to `path`: timestamps first, then permissions.
