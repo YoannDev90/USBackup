@@ -129,7 +129,11 @@ fn create_symlink_os(target: &Path, dst: &Path) -> Result<()> {
 fn create_symlink_os(target: &Path, dst: &Path) -> Result<()> {
     // Prefer the accurate kind when the target is stat-able; fall back to a
     // file/dir cascade for dangling links.
-    let as_dir = std::fs::metadata(dst.parent().map(|p| p.join(target)).unwrap_or(target))
+    let as_dir = std::fs::metadata(
+        dst.parent()
+            .map(|p| p.join(target))
+            .unwrap_or_else(|| target.to_path_buf()),
+    )
         .map(|m| m.is_dir())
         .unwrap_or(false);
 
