@@ -10,7 +10,7 @@
 # Options (pass after -- when piping):
 #   --prefix DIR     Install directory (default: ~/.local/bin)
 #   --version X.Y.Z  Install a specific version instead of latest
-#   --no-service     Skip the systemd user-service install prompt
+#   --no-service     Skip the background agent service install prompt
 #   --force          Overwrite an existing binary without asking
 
 set -euo pipefail
@@ -55,20 +55,32 @@ echo
 
 need curl
 need tar
-need sha256sum
+# macOS ships shasum, not sha256sum.
+if command -v sha256sum >/dev/null 2>&1; then
+    SHA256_CMD=(sha256sum)
+elif command -v shasum >/dev/null 2>&1; then
+    SHA256_CMD=(shasum -a 256)
+else
+    die "'sha256sum' or 'shasum' is required but not installed."
+fi
 
 case "$(uname -s)" in
-    Linux) OS="linux" ;;
-    *)     die "Unsupported OS: $(uname -s). USBackup is Linux-only." ;;
+    Linux)  OS="linux" ;;
+    Darwin) OS="macos" ;;
+    *)      die "Unsupported OS: $(uname -s). USBackup supports Linux and macOS." ;;
 esac
 
-case "$(uname -m)" in
-    x86_64|amd64)  ARCH="amd64" ;;
-    aarch64|arm64) ARCH="arm64" ;;
-    *)             die "Unsupported architecture: $(uname -m)" ;;
-esac
-
-ASSET="usbackup-${OS}-${ARCH}"
+if [[ "$OS" == "macos" ]]; then
+    # Releases ship a single universal binary for both Mac architectures.
+    ASSET="usbackup-macos-universal"
+else
+    case "$(uname -m)" in
+        x86_64|amd64)  ARCH="amd64" ;;
+        aarch64|arm64) ARCH="arm64" ;;
+        *)             die "Unsupported architecture: $(uname -m)" ;;
+    esac
+    ASSET="usbackup-${OS}-${ARCH}"
+fi
 API="https://api.github.com/repos/${REPO}/releases"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -116,7 +128,7 @@ if curl -fsSL -o "${TMP_DIR}/SHA256SUMS" "$CHECKSUMS_URL" 2>/dev/null; then
     if [[ -z "$EXPECTED" ]]; then
         warn "No checksum entry for ${ASSET} in SHA256SUMS; skipping verification."
     else
-        ACTUAL="$(sha256sum "${TMP_DIR}/${ASSET}" | awk '{print $1}')"
+        ACTUAL="$("${SHA256_CMD[@]}" "${TMP_DIR}/${ASSET}" | awk '{print $1}')"
         [[ "$ACTUAL" == "$EXPECTED" ]] || die "Checksum verification FAILED — refusing to install."
         info "Checksum OK"
     fi
@@ -151,10 +163,10 @@ case ":${PATH}:" in
         ;;
 esac
 
-# ---------------------------------------------------------------- systemd service
+# ---------------------------------------------------------------- background agent service
 if [[ "$INSTALL_SERVICE" == "ask" ]]; then
-    if [[ -t 0 ]] && command -v systemctl >/dev/null 2>&1; then
-        read -r -p "Install and enable the systemd user service? [Y/n] " ans
+    if [[ -t 0 ]] && { command -v systemctl >/dev/null 2>&1 || command -v launchctl >/dev/null 2>&1; }; then
+        read -r -p "Install and enable the background agent service? [Y/n] " ans
         INSTALL_SERVICE="${ans:-yes}"
         [[ "$ans" =~ ^[Nn]$ ]] && INSTALL_SERVICE="no" || INSTALL_SERVICE="yes"
     else
@@ -165,9 +177,9 @@ if [[ "$INSTALL_SERVICE" == "ask" ]]; then
 fi
 
 if [[ "$INSTALL_SERVICE" == "yes" ]]; then
-    echo "→ Installing systemd user service …"
+    echo "→ Installing the background agent service …"
     if "$DEST" --install-service; then
-        info "Service installed. Start it with: systemctl --user start usbackup.service"
+        info "Service installed."
     else
         warn "Service installation failed; you can retry with: ${DEST} --install-service"
     fi

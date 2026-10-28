@@ -39,7 +39,7 @@ $ usbackup
 | :-- | :-- | :-- |
 | **Linux** | ✅ | Native `udev` + `udisksctl`. Releases ship amd64 and arm64 binaries. |
 | **Windows** | ✅ | WMI discovery + native auto-mount, Task Scheduler service, `incremental` off (see [Windows notes](#windows-notes)). Releases ship x64 and arm64 `.exe`. |
-| **macOS** | ❌ | Fork + PR welcome. |
+| **macOS** | ✅ | `diskutil` discovery + mount, launchd LaunchAgent service, universal binary (Apple Silicon + Intel). |
 
 ## Installation
 
@@ -57,13 +57,17 @@ $ usbackup
 - **rsync** — a native MSVC build such as [nuket/rsync-windows](https://github.com/nuket/rsync-windows) (x64 / arm64), present on `PATH` as `rsync`.
 - Nothing else: Windows mounts removable drives by itself, so there is no `udisksctl` equivalent to install.
 
+### Requirements (macOS)
+
+- **Nothing to install** — `rsync` and `diskutil` ship with macOS, and volumes auto-mount under `/Volumes`.
+
 ### Quick install (curl)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/YoannDev90/USBackup/master/install.sh | bash
 ```
 
-The script detects your OS/arch, downloads the latest release binary, verifies its SHA256 checksum, installs it to `~/.local/bin`, and offers to set up the systemd user service.
+The script detects your OS/arch (Linux amd64/arm64, macOS universal), downloads the latest release binary, verifies its SHA256 checksum, installs it to `~/.local/bin`, and offers to set up the background agent service (systemd on Linux, launchd on macOS).
 
 <details>
 <summary>Installer options</summary>
@@ -116,6 +120,16 @@ schtasks /Run /TN USBackup
 The task runs in your interactive session (not Session 0), so toast
 notifications and `%APPDATA%` access keep working.
 
+**macOS (launchd LaunchAgent, loads at login):**
+
+```bash
+usbackup --install-service
+launchctl kickstart gui/$(id -u)/com.usbackup.agent
+```
+
+The agent runs in your user session, so desktop notifications and
+`/Volumes` access keep working; logs go to `~/Library/Logs/usbackup.log`.
+
 ### Windows notes
 
 - **Discovery & mounting** — devices come from WMI (`Win32_DiskDrive` joined
@@ -129,6 +143,15 @@ notifications and `%APPDATA%` access keep working.
   Linux keeps both.
 - **SmartScreen** — release `.exe` files are not code-signed yet; SmartScreen
   may prompt on first launch ("More info" → "Run anyway").
+
+### macOS notes
+
+- **Discovery & mounting** — partitions come from `diskutil list -plist
+  external physical` and USB ids from `system_profiler`; volumes auto-mount
+  under `/Volumes`.
+- **Gatekeeper** — release binaries are not signed or notarized yet. If
+  macOS blocks the downloaded binary, clear the quarantine attribute:
+  `xattr -d com.apple.quarantine ~/.local/bin/USBackup`.
 
 ## Quick start
 
@@ -205,7 +228,8 @@ post_backup_script = "notify-send 'Backup done!'"
 | Local config (secret key + whitelists) | `~/.config/usbackup/backup_config.toml` (`0600`) |
 | Pending device queue | `~/.config/usbackup/pending_devices.toml` |
 | Per-device rsync logs | `~/.local/share/usbackup/logs/<name>.log` |
-| systemd user service | `~/.config/systemd/user/usbackup.service` |
+| systemd user service (Linux) | `~/.config/systemd/user/usbackup.service` |
+| launchd LaunchAgent (macOS) | `~/Library/LaunchAgents/com.usbackup.agent.plist` |
 
 ## Native sync engine (opt-in)
 
@@ -266,7 +290,7 @@ Commands (default = daemon):
                             runs the interactive backup wizard
   list-devices              List approved / ask-each-time / ignored /
                             pending devices
-  --install-service         Install and enable the systemd user service
+  --install-service         Install and enable the background service
   --help, -h                Show help
   --version, -V             Show version
 
@@ -287,7 +311,7 @@ usbackup -v                           # agent with debug logging
 usbackup list-devices                 # show all known devices
 usbackup approve ABCD-1234            # approve a device queued by a headless run
 usbackup approve ABCD-1234 --configure  # approve + launch the wizard now
-usbackup --install-service            # set up the systemd user service
+usbackup --install-service            # set up the background service
 ```
 
 When the agent runs **without a TTY** (e.g. under systemd), unknown devices are recorded as *pending* and a desktop notification tells you to run `usbackup approve <uuid>` from a terminal.
@@ -321,7 +345,6 @@ Unit tests cover the HMAC sign/verify round-trip, tamper detection, canonical se
 - [ ] Log rotation beyond single-file `.1` backup.
 - [ ] Backup scheduling / interval triggers.
 - [ ] Sync engine as the default backend (replace `rsync`).
-- [ ] macOS / Windows support.
 
 ## License
 

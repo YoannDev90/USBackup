@@ -41,6 +41,9 @@ udev = "0.9.3"
 filetime = "0.2"
 wmi = "0.15"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = "1"
+
 [features]
 default = []
 # Use the pure-Rust sync engine instead of the external `rsync` binary.
