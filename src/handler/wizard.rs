@@ -1,5 +1,5 @@
 use crate::handler::github::{download_gitignore, fetch_gitignore_templates};
-use crate::handler::udev_utils::mount_partition;
+use crate::device::mount_partition;
 use crate::models::device::{BackupRule, DeviceAction, DeviceConfig};
 use dialoguer::{Confirm, FuzzySelect, Input, MultiSelect, Select};
 use log::{debug, error, info, warn};
@@ -29,7 +29,7 @@ pub async fn run_wizard(
     for i in 0..15 {
         // Attempt active mount for the partition matching our UUID + VID/PID
         if let Some(part) =
-            crate::handler::udev_utils::find_partition_by_uuid(uuid, Some(vid), Some(pid))
+            crate::device::find_partition_by_uuid(uuid, Some(vid), Some(pid))
         {
             if mount_partition(&part.devnode).await {
                 info!("Mount successful for {}", part.devnode);
@@ -48,7 +48,7 @@ pub async fn run_wizard(
                 }
                 // Prefer a strict match: disk backing devnode is our USB partition
                 let disk_devnode = format!("/dev/{}", d.name().to_string_lossy());
-                let strict = crate::handler::udev_utils::find_usb_partitions().iter().any(|p| {
+                let strict = crate::device::find_usb_partitions().iter().any(|p| {
                     p.uuid.as_deref() == Some(uuid) && p.devnode == disk_devnode
                 });
                 if strict {
@@ -56,7 +56,7 @@ pub async fn run_wizard(
                 }
                 // Fallback: any USB partition with our UUID exists and this disk
                 // sits under a removable media mount point
-                let uuid_present = crate::handler::udev_utils::find_usb_partitions()
+                let uuid_present = crate::device::find_usb_partitions()
                     .iter()
                     .any(|p| p.uuid.as_deref() == Some(uuid));
                 uuid_present

@@ -1,4 +1,4 @@
-use crate::handler::udev_utils::{find_usb_partitions, mount_partition};
+use crate::device::{find_usb_partitions, mount_partition};
 use crate::models::device::DeviceConfig;
 use crate::notifications;
 use chrono;
@@ -541,7 +541,7 @@ async fn inner_trigger_backup(
 
         if should_unmount {
             info!("Unmounting device {:?}", usb_path);
-            if !crate::handler::udev_utils::unmount_by_mount_point(&usb_path).await {
+            if !crate::device::unmount_by_mount_point(&usb_path).await {
                 error!("Failed to unmount {:?} after backup", usb_path);
                 notifications::notify_backup_error(
                     &device_config.name,
