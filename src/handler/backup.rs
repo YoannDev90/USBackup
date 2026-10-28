@@ -133,6 +133,26 @@ async fn inner_trigger_backup(
 ) {
     info!("Preparing backup for {}", device_config.name);
 
+    // Windows: the rsync port cannot create the hard links that
+    // incremental snapshots rely on, so they would silently lose their
+    // deduplication. Clear the flag before any consumer reads it.
+    #[cfg(windows)]
+    let device_config = {
+        let mut config = device_config.clone();
+        for rule in &mut config.backup_rules {
+            if rule.incremental {
+                warn!(
+                    "incremental snapshots are disabled on Windows (hard links unavailable); '{}' runs as a plain mirror",
+                    rule.source_path
+                );
+                rule.incremental = false;
+            }
+        }
+        config
+    };
+    #[cfg(not(windows))]
+    let device_config = device_config;
+
     if device_config.backup_rules.is_empty() {
         warn!(
             "Device '{}' has ZERO backup rules — nothing will be synced. \
