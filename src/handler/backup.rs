@@ -1,4 +1,4 @@
-use crate::handler::udev_utils::{find_usb_partitions, mount_partition};
+use crate::device::{find_usb_partitions, is_removable_mount, mount_partition, to_devnode};
 use crate::models::device::DeviceConfig;
 use crate::notifications;
 use chrono;
@@ -78,12 +78,12 @@ pub async fn trigger_backup_by_uuid(_vid: u16, _pid: u16, uuid: &str) -> Option<
                     }
 
                     // Mounted under /run/media or /media: almost certainly our key
-                    if mount.starts_with("/run/media/") || mount.starts_with("/media/") {
+                    if is_removable_mount(&mount) {
                         return true;
                     }
 
                     // Otherwise verify the backing device node matches our partition
-                    let disk_devnode = format!("/dev/{}", d.name().to_string_lossy());
+                    let disk_devnode = to_devnode(&d.name().to_string_lossy());
                     disk_devnode == part.devnode
                 }) {
                     debug!("Found mount point: {:?}", d.mount_point());
@@ -200,7 +200,7 @@ async fn inner_trigger_backup(
                 if let Some(conf_uuid) = &device_config.uuid {
                     // A sysinfo disk matches if its backing devnode is the USB
                     // partition with our UUID (correlates disk -> udev partition).
-                    let disk_devnode = format!("/dev/{}", name);
+                    let disk_devnode = to_devnode(&name);
                     if find_usb_partitions().iter().any(|p| {
                         p.uuid.as_deref() == Some(conf_uuid.as_str()) && p.devnode == disk_devnode
                     }) {
@@ -209,8 +209,7 @@ async fn inner_trigger_backup(
                 }
 
                 if !matches {
-                    let is_removable =
-                        mount_point.contains("/media/") || mount_point.contains("/run/media/");
+                    let is_removable = is_removable_mount(&mount_point);
 
                     if mount_point
                         .to_lowercase()
@@ -541,7 +540,7 @@ async fn inner_trigger_backup(
 
         if should_unmount {
             info!("Unmounting device {:?}", usb_path);
-            if !crate::handler::udev_utils::unmount_by_mount_point(&usb_path).await {
+            if !crate::device::unmount_by_mount_point(&usb_path).await {
                 error!("Failed to unmount {:?} after backup", usb_path);
                 notifications::notify_backup_error(
                     &device_config.name,

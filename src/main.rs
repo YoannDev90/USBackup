@@ -1,5 +1,6 @@
 use nusb::hotplug::HotplugEvent;
 
+mod device;
 mod handler;
 mod models;
 mod notifications;
@@ -290,7 +291,7 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
                     }
 
-                    let parts = crate::handler::udev_utils::find_usb_partitions();
+                    let parts = crate::device::find_usb_partitions();
                     debug!(
                         "UUID lookup attempt {}/5: {} USB partition(s) visible",
                         i + 1,
