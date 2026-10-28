@@ -219,11 +219,15 @@ mod tests {
     fn sparse_file_is_detected() {
         use std::os::unix::fs::MetadataExt;
         let dir = tempdir().unwrap();
-        let p = make_sparse(dir.path(), "sparse.bin", 16 * 1024 * 1024);
+        // 32 MiB, matching the copy test below: the macOS CI runner's
+        // filesystem preallocates smaller files entirely (a 16 MiB fixture
+        // came back fully allocated even via ftruncate), while 32 MiB holes
+        // are kept physical on every leg.
+        let p = make_sparse(dir.path(), "sparse.bin", 32 * 1024 * 1024);
         let md = fs::metadata(&p).unwrap();
         assert!(
             is_sparse(&p).unwrap(),
-            "16 MiB hole should read as sparse: allocated {} bytes, len {}",
+            "32 MiB hole should read as sparse: allocated {} bytes, len {}",
             md.blocks().saturating_mul(512),
             md.len()
         );
