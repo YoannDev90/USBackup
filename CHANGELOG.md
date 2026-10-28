@@ -25,6 +25,44 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   throughput, cold/noop sync at 10 k and 100 k files, snapshot linking, and
   the pool-size sweeps behind the default tuning (metadata 8, bulk 2,
   1 MiB bulk threshold).
+- **Windows support** — USBackup now runs natively on Windows (x64 and
+  arm64 release `.exe`):
+  - Device discovery through WMI (`Win32_DiskDrive` joined to
+    `Win32_LogicalDisk` by volume serial), keeping VID/PID + serial
+    identification; Windows auto-mounts volumes itself, so no `udisksctl`
+    equivalent is involved.
+  - Background agent via a Task Scheduler logon task
+    (`usbackup --install-service` + `usbackup.xml`) running in the
+    interactive session, so toast notifications and `%APPDATA%` keep
+    working.
+  - **`install.ps1`** PowerShell installer mirroring `install.sh`
+    (SHA256 verification, `%LOCALAPPDATA%` install, optional scheduled
+    task).
+  - Incremental snapshots are disabled there: the rsync ports cannot
+    create the hard links `--link-dest` needs, so `incremental` is forced
+    to `false` at backup time with a logged warning and backups run as
+    plain mirrors (README "Windows notes").
+  - `$PATH` lookup understands `PATHEXT`, so a bare `rsync` resolves to
+    `rsync.exe`.
+- **Platform device layer** — `udev`/`udisksctl` extracted from
+  `udev_utils.rs` into `src/device/` behind `#[cfg(target_os = ...)]`,
+  with a shared public API (`find_usb_partitions`,
+  `find_partition_by_uuid`, `mount_partition`, `unmount_by_mount_point`,
+  `is_removable_mount`, `to_devnode`) and a matching `src/service/`
+  module (systemd on Linux, Task Scheduler on Windows, launchd stub).
+
+### Changed
+
+- **Dependency checks are platform-aware** — `rsync` + `udisksctl` on
+  Linux, `rsync` only on Windows (the OS auto-mounts); the macOS arm
+  (`rsync` + `diskutil`) is in place for the port in progress.
+
+### CI
+
+- **Windows legs** — `rust.yml` runs build, tests and a `--version` smoke
+  test on `windows-latest` next to Ubuntu; `release.yml` builds
+  `usbackup-windows-x64.exe` and `usbackup-windows-arm64.exe` and attaches
+  them to the release with SHA256SUMS.
 
 ## [0.1.0] — 2026-10-15
 
