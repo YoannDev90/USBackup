@@ -102,7 +102,9 @@ pub async fn run_wizard(
         .interact_text()?;
 
     // 3. Select source folders to backup (simplified UI)
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+    let home = directories::BaseDirs::new()
+        .map(|d| d.home_dir().to_string_lossy().into_owned())
+        .unwrap_or_else(|| "/".into());
     let common_dirs = vec![
         "Documents",
         "Pictures",

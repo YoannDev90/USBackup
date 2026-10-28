@@ -72,7 +72,13 @@ fn check_dependencies() -> Result<(), Box<dyn std::error::Error + Send + Sync>> 
 }
 
 fn install_systemd_service() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let home = std::env::var("HOME")?;
+    // BaseDirs resolves the home directory on every OS (HOME on Unix,
+    // the profile folder on Windows).
+    let home = directories::BaseDirs::new()
+        .ok_or("Could not determine the home directory")?
+        .home_dir()
+        .to_string_lossy()
+        .into_owned();
     let exe_path = std::env::current_exe()?;
     let service_dir = format!("{}/.config/systemd/user", home);
     let service_path = format!("{}/usbackup.service", service_dir);
