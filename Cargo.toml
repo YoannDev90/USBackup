@@ -38,6 +38,7 @@ rayon = "1"
 udev = "0.9.3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
+filetime = "0.2"
 wmi = "0.15"
 
 [features]

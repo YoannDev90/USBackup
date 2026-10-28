@@ -192,8 +192,16 @@ impl FlushJournal {
 }
 
 /// Open `path` and fsync its data. Portable (`fsync` / `FlushFileBuffers`).
+///
+/// `FlushFileBuffers` needs a handle with write access on Windows (fsync
+/// works on any fd on Unix), so open write-first and fall back to a
+/// read-only open: plain files stay flushable on both platforms, and
+/// read-only destinations keep working on Unix.
 pub fn sync_file_at(path: &Path) -> io::Result<()> {
-    let file = File::open(path)?;
+    let file = File::options()
+        .write(true)
+        .open(path)
+        .or_else(|_| File::open(path))?;
     file.sync_all()
 }
 
