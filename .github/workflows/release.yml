@@ -15,7 +15,7 @@ env:
 
 jobs:
     build:
-        name: Build (${{ matrix.arch }})
+        name: Build (${{ matrix.asset }})
         runs-on: ${{ matrix.os }}
         permissions:
             contents: read
@@ -25,9 +25,23 @@ jobs:
                     - os: ubuntu-latest
                       arch: amd64
                       target: x86_64-unknown-linux-gnu
+                      binary: USBackup
+                      asset: usbackup-linux-amd64
                     - os: ubuntu-24.04-arm
                       arch: arm64
                       target: aarch64-unknown-linux-gnu
+                      binary: USBackup
+                      asset: usbackup-linux-arm64
+                    - os: windows-latest
+                      arch: x64
+                      target: x86_64-pc-windows-msvc
+                      binary: USBackup.exe
+                      asset: usbackup-windows-x64.exe
+                    - os: windows-11-arm
+                      arch: arm64
+                      target: aarch64-pc-windows-msvc
+                      binary: USBackup.exe
+                      asset: usbackup-windows-arm64.exe
         steps:
             - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
               with:
@@ -39,6 +53,7 @@ jobs:
                   targets: ${{ matrix.target }}
 
             - name: Install dependencies
+              if: runner.os == 'Linux'
               run: |
                   sudo apt-get update
                   sudo apt-get install -y libudev-dev pkg-config
@@ -47,15 +62,16 @@ jobs:
               run: cargo build --release --target ${{ matrix.target }}
 
             - name: Prepare Artifact
+              shell: bash
               run: |
                   mkdir -p dist
-                  cp target/${{ matrix.target }}/release/USBackup dist/usbackup-linux-${{ matrix.arch }}
+                  cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/${{ matrix.asset }}
 
             - name: Upload artifacts
               uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
               with:
-                  name: usbackup-linux-${{ matrix.arch }}
-                  path: dist/usbackup-linux-${{ matrix.arch }}
+                  name: ${{ matrix.asset }}
+                  path: dist/${{ matrix.asset }}
 
     github-release:
         name: Create GitHub Release
@@ -73,7 +89,7 @@ jobs:
               run: |
                   cd artifacts
                   : > SHA256SUMS
-                  for dir in usbackup-linux-*/; do
+                  for dir in usbackup-*/; do
                       (cd "$dir" && sha256sum "$(basename "$dir")") >> SHA256SUMS
                   done
                   cat SHA256SUMS
@@ -87,6 +103,8 @@ jobs:
                   gh release create "$TAG_NAME" \
                     artifacts/usbackup-linux-amd64/usbackup-linux-amd64 \
                     artifacts/usbackup-linux-arm64/usbackup-linux-arm64 \
+                    artifacts/usbackup-windows-x64.exe/usbackup-windows-x64.exe \
+                    artifacts/usbackup-windows-arm64.exe/usbackup-windows-arm64.exe \
                     artifacts/SHA256SUMS \
                     --title "Release $TAG_NAME" \
                     --latest
