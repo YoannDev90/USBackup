@@ -26,3 +26,13 @@ pub async fn unmount_by_mount_point(mount_point: &Path) -> bool {
     );
     false
 }
+
+/// macOS mounts external volumes under /Volumes.
+pub fn is_removable_mount(mount_point: &str) -> bool {
+    mount_point.starts_with("/Volumes/")
+}
+
+/// sysinfo reports BSD disk names (disk2s1 -> /dev/disk2s1).
+pub fn to_devnode(name: &str) -> String {
+    format!("/dev/{}", name)
+}

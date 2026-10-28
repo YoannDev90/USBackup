@@ -1,5 +1,5 @@
 use crate::handler::github::{download_gitignore, fetch_gitignore_templates};
-use crate::device::mount_partition;
+use crate::device::{is_removable_mount, mount_partition, to_devnode};
 use crate::models::device::{BackupRule, DeviceAction, DeviceConfig};
 use dialoguer::{Confirm, FuzzySelect, Input, MultiSelect, Select};
 use log::{debug, error, info, warn};
@@ -47,7 +47,7 @@ pub async fn run_wizard(
                     return false;
                 }
                 // Prefer a strict match: disk backing devnode is our USB partition
-                let disk_devnode = format!("/dev/{}", d.name().to_string_lossy());
+                let disk_devnode = to_devnode(&d.name().to_string_lossy());
                 let strict = crate::device::find_usb_partitions().iter().any(|p| {
                     p.uuid.as_deref() == Some(uuid) && p.devnode == disk_devnode
                 });
@@ -59,8 +59,7 @@ pub async fn run_wizard(
                 let uuid_present = crate::device::find_usb_partitions()
                     .iter()
                     .any(|p| p.uuid.as_deref() == Some(uuid));
-                uuid_present
-                    && (mount.starts_with("/run/media/") || mount.starts_with("/media/"))
+                uuid_present && is_removable_mount(&mount)
             })
             .map(|d| {
                 let name = d.name().to_string_lossy();

@@ -180,3 +180,14 @@ pub async fn unmount_by_mount_point(mount_point: &Path) -> bool {
         }
     }
 }
+
+/// Whether a mount point hosts removable media. Linux desktops mount
+/// USB volumes under /media or /run/media.
+pub fn is_removable_mount(mount_point: &str) -> bool {
+    mount_point.starts_with("/run/media/") || mount_point.starts_with("/media/")
+}
+
+/// Device node for a disk name as reported by sysinfo (sdb1 -> /dev/sdb1).
+pub fn to_devnode(name: &str) -> String {
+    format!("/dev/{}", name)
+}

@@ -30,3 +30,13 @@ pub async fn unmount_by_mount_point(mount_point: &Path) -> bool {
     );
     false
 }
+
+/// Needs GetDriveTypeW(DRIVE_REMOVABLE); feat/win-support fills this in.
+pub fn is_removable_mount(_mount_point: &str) -> bool {
+    false
+}
+
+/// sysinfo reports drive letters ("D:"), which need no /dev prefix.
+pub fn to_devnode(name: &str) -> String {
+    name.to_string()
+}
