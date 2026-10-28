@@ -14,11 +14,6 @@ pub async fn mount_partition(part: &str) -> bool {
     false
 }
 
-pub fn find_devnode_for_mount(mount_point: &Path) -> Option<String> {
-    debug!("device: macOS find_devnode_for_mount is a stub ({:?})", mount_point);
-    None
-}
-
 pub async fn unmount_by_mount_point(mount_point: &Path) -> bool {
     debug!(
         "device: macOS unmount is a stub ({:?} not unmounted)",
