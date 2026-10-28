@@ -447,7 +447,9 @@ mod tests {
         let store = SnapshotStore::new(dir.path());
         let policy = RetentionPolicy::default();
 
-        let first = store.create_snapshot(&src, &policy).unwrap();
+        // `first` is only read by the unix inode assertion below; the
+        // snapshot itself must exist on every platform either way.
+        let _first = store.create_snapshot(&src, &policy).unwrap();
         let second = store.create_snapshot(&src, &policy).unwrap();
 
         // Nothing changed: every regular file is linked, none recopied.
@@ -459,7 +461,7 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            let a1 = store.backups_dir.join(&first.dir_name).join("docs/a.txt");
+            let a1 = store.backups_dir.join(&_first.dir_name).join("docs/a.txt");
             let a2 = store.backups_dir.join(&second.dir_name).join("docs/a.txt");
             assert_eq!(
                 fs::metadata(&a1).unwrap().ino(),

@@ -186,6 +186,7 @@ mod tests {
         assert!(idx.get(Path::new("a/b")).unwrap().is_dir);
     }
 
+    #[cfg(unix)]
     #[test]
     fn scan_records_symlink_without_dereferencing() {
         let dir = tempdir().unwrap();

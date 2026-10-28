@@ -361,6 +361,7 @@ mod tests {
         assert_eq!(fs::read(dst.join("old-target")).unwrap(), b"KEEP");
     }
 
+    #[cfg(unix)]
     #[test]
     fn read_symlink_classifies_relative_and_absolute() {
         let dir = tempdir().unwrap();
