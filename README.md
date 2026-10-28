@@ -1,5 +1,7 @@
 # USBackup
 
+<p align="center"><img src="assets/logo/wordmark.svg" alt="USBackup" width="320"></p>
+
 Automated USB backup agent written in Rust. Runs in the background, detects USB keys the instant they are plugged in, and runs signed `rsync` backups from your machine to the key.
 
 ```
@@ -9,6 +11,10 @@ $ usbackup
     → rsync -avP --delete ~/Documents/ /run/media/…/backups/docs
 [✓] Backup finished for SanDisk Ultra
 ```
+
+## Name
+
+**USBackup** is a contraction of **USB** + **Backup**: the medium you plug in, and the job it does. The name is pronounced "USB-backup" (*you-es-bee-backup*), written as one word with camel case to keep both halves readable.
 
 ## Features
 
