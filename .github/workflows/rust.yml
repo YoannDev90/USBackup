@@ -19,6 +19,9 @@ jobs:
     permissions:
       contents: read
     strategy:
+      # Keep every OS leg running: one failing platform must not cancel the
+      # others (a cancelled job hides whether the remaining platforms pass).
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
