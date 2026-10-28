@@ -53,15 +53,42 @@ fn command_in_path(cmd: &str) -> bool {
     std::env::var_os("PATH")
         .map(|paths| {
             std::env::split_paths(&paths).any(|dir| {
-                let candidate = dir.join(cmd);
-                candidate.is_file()
+                candidate_commands(&dir, cmd)
+                    .iter()
+                    .any(|candidate| candidate.is_file())
             })
         })
         .unwrap_or(false)
 }
 
+/// Candidate file names for `cmd` inside `dir`. Windows resolves bare
+/// names through PATHEXT (`.COM`, `.EXE`, ...), so `rsync` only matches
+/// there if the extension is appended by hand.
+#[cfg(windows)]
+fn candidate_commands(dir: &std::path::Path, cmd: &str) -> Vec<std::path::PathBuf> {
+    let mut names = vec![dir.join(cmd)];
+    let pathext =
+        std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+    for ext in pathext.split(';').filter(|ext| !ext.is_empty()) {
+        names.push(dir.join(format!("{}{}", cmd, ext)));
+    }
+    names
+}
+
+#[cfg(not(windows))]
+fn candidate_commands(dir: &std::path::Path, cmd: &str) -> Vec<std::path::PathBuf> {
+    vec![dir.join(cmd)]
+}
+
 fn check_dependencies() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Windows mounts USB keys through the OS (auto-mount); there is no
+    // udisksctl equivalent to require there.
+    #[cfg(target_os = "linux")]
     let deps = ["rsync", "udisksctl"];
+    #[cfg(target_os = "macos")]
+    let deps = ["rsync", "diskutil"];
+    #[cfg(target_os = "windows")]
+    let deps = ["rsync"];
     for dep in deps {
         if !command_in_path(dep) {
             error!("Missing dependency: {}", dep);
