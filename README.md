@@ -31,6 +31,7 @@ $ usbackup
 - **Interactive wizard** — first plug-in launches a guided setup (name, source folders, exclusions, snapshot mode, unmount, post-script).
 - **Systemd service** — one flag to install and enable a user service.
 - **Verbose logging** — `-v` (debug) / `-vv` (trace) / `-q` (warn), or `RUST_LOG` for fine-grained control.
+- **Native sync engine** — opt-in pure-Rust backend (`--features sync-engine`) that runs in-process with no external `rsync`; see [Native sync engine](#native-sync-engine-opt-in).
 
 ## Supported OS
 
@@ -206,6 +207,53 @@ post_backup_script = "notify-send 'Backup done!'"
 | Per-device rsync logs | `~/.local/share/usbackup/logs/<name>.log` |
 | systemd user service | `~/.config/systemd/user/usbackup.service` |
 
+## Native sync engine (opt-in)
+
+Beyond the default `rsync` backend, USBackup ships a pure-Rust sync engine
+that runs entirely in-process — no child process, no shell, no C toolchain.
+It is portable by construction (Linux, macOS, Windows) and is the intended
+replacement for the `rsync` dependency.
+
+```bash
+cargo build --release --features sync-engine
+```
+
+`rsync` stays the default backend until the engine is validated end-to-end on
+every supported platform; the feature flag keeps that switch explicit.
+
+### Capabilities
+
+- **Scan + compare** — metadata-only change detection (mtime + size, 2 s
+  tolerance for FAT/exFAT); per-rule excludes, bundled defaults and
+  `.gitignore` are honored, including on incremental snapshots.
+- **Copy** — atomic temp-file + rename, preserving mtime and permissions;
+  bounded parallelism with separate metadata and bulk-I/O pools.
+- **Snapshots** — incremental hard-link snapshots with retention, or a plain
+  mirror. Symlinks are preserved as-is and never dereferenced.
+- **Delta** — optional Rabin-Karp rolling-hash delta for large files
+  (off by default).
+- **Portable** — no `unsafe`, no C dependencies; cross-compiles to Linux,
+  macOS and Windows.
+
+### Benchmarks
+
+Criterion harness in `benches/sync_engine.rs` (run with `cargo bench`),
+measured on local NVMe under Linux:
+
+| Benchmark | Result |
+| :-- | :-- |
+| Scan 10 000 files | ~20 ms (≈490 k files/s) |
+| Scan 100 000 files | ~222 ms (≈450 k files/s) |
+| Cold backup, 10 000 files | ~63 ms |
+| Cold backup, 100 000 files | ~640 ms (≈156 k files/s) |
+| No-op verify, 100 000 files | ~512 ms |
+| Incremental snapshot, 10 000 hard links | ~64 ms |
+
+The default pool sizes (metadata concurrency 8, bulk concurrency 2, 1 MiB
+bulk threshold) were selected from sweeps in that harness. USB-key thresholds
+stay gated on real-hardware measurements — local disk and a flash key behave
+differently.
+
 ## CLI
 
 ```
@@ -268,9 +316,12 @@ Unit tests cover the HMAC sign/verify round-trip, tamper detection, canonical se
 - [x] Headless approval via CLI (`approve`, `list-devices`).
 - [x] Verbose logging (`-v` / `-vv` / `-q` / `RUST_LOG`).
 - [x] Unit tests for crypto and path sanitization.
+- [x] Native sync engine (opt-in, `--features sync-engine`).
 - [ ] Multi-target backup (SSH / cloud).
 - [ ] Log rotation beyond single-file `.1` backup.
 - [ ] Backup scheduling / interval triggers.
+- [ ] Sync engine as the default backend (replace `rsync`).
+- [ ] macOS / Windows support.
 
 ## License
 
