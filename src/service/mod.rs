@@ -1,6 +1,6 @@
 //! Background service installation, one backend per supported OS:
 //! systemd user service (linux), Task Scheduler (windows), launchd
-//! (macos — stub until plan_mac.md M4 fills it in).
+//! LaunchAgent (macos).
 
 #[cfg(target_os = "linux")]
 mod linux;

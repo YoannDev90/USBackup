@@ -450,6 +450,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             cmd_list_devices();
             Ok(())
         }
+        // Service backends launch the agent with this explicit token
+        // (usbackup.xml, usbackup.plist); bare invocation does the same.
+        Some("daemon") => run_daemon().await,
         Some(other) => {
             eprintln!("Unknown argument: {}\n", other);
             eprintln!("{}", USAGE);
