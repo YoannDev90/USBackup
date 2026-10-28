@@ -199,11 +199,15 @@ mod tests {
 
     /// Create a sparse-ish file: a small blob near the start, a large apparent
     /// hole, then a small blob at the end. Returns its path.
+    ///
+    /// The hole is carved with `set_len` (ftruncate), the portable way to get a
+    /// physically unallocated region: on macOS an lseek-past-EOF + write can be
+    /// preallocated by the filesystem, which would make the fixture dense.
     fn make_sparse(dir: &Path, name: &str, hole: u64) -> std::path::PathBuf {
         let p = dir.join(name);
         let mut f = File::create(&p).unwrap();
         f.write_all(b"HEAD").unwrap();
-        // Seek past a big region to create a hole, then write a tail.
+        f.set_len(hole + 4).unwrap();
         f.seek(SeekFrom::Start(hole)).unwrap();
         f.write_all(b"TAIL").unwrap();
         drop(f);
@@ -213,9 +217,16 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn sparse_file_is_detected() {
+        use std::os::unix::fs::MetadataExt;
         let dir = tempdir().unwrap();
         let p = make_sparse(dir.path(), "sparse.bin", 16 * 1024 * 1024);
-        assert!(is_sparse(&p).unwrap(), "16 MiB hole should read as sparse");
+        let md = fs::metadata(&p).unwrap();
+        assert!(
+            is_sparse(&p).unwrap(),
+            "16 MiB hole should read as sparse: allocated {} bytes, len {}",
+            md.blocks().saturating_mul(512),
+            md.len()
+        );
     }
 
     #[cfg(unix)]
