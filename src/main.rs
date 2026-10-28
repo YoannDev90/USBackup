@@ -4,6 +4,7 @@ mod device;
 mod handler;
 mod models;
 mod notifications;
+mod service;
 mod storage;
 mod sync;
 mod tui_lock;
@@ -11,7 +12,6 @@ mod tui_lock;
 use crate::storage::{load_config, PendingDevice};
 use log::{debug, error, info, warn};
 use std::io::IsTerminal;
-use std::process::Command;
 
 const USAGE: &str = "\
 USBackup - automated USB backup agent
@@ -26,7 +26,7 @@ Commands (default = daemon):
                             runs the interactive backup wizard
   list-devices              List approved / ask-each-time / ignored /
                             pending devices
-  --install-service         Install and enable the systemd user service
+  --install-service         Install and enable the background service
   --help, -h                Show this help
   --version, -V             Show version
 
@@ -68,46 +68,6 @@ fn check_dependencies() -> Result<(), Box<dyn std::error::Error + Send + Sync>> 
             return Err(format!("The tool '{}' is required but is not installed.", dep).into());
         }
     }
-    Ok(())
-}
-
-fn install_systemd_service() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // BaseDirs resolves the home directory on every OS (HOME on Unix,
-    // the profile folder on Windows).
-    let home = directories::BaseDirs::new()
-        .ok_or("Could not determine the home directory")?
-        .home_dir()
-        .to_string_lossy()
-        .into_owned();
-    let exe_path = std::env::current_exe()?;
-    let service_dir = format!("{}/.config/systemd/user", home);
-    let service_path = format!("{}/usbackup.service", service_dir);
-
-    if std::path::Path::new(&service_path).exists() {
-        println!("Service already installed at {}", service_path);
-        return Ok(());
-    }
-
-    info!("Installing systemd user service...");
-    std::fs::create_dir_all(&service_dir)?;
-
-    let template = include_str!("../usbackup.service");
-    let service_content = template.replace("%EXE_PATH%", &exe_path.display().to_string());
-
-    std::fs::write(&service_path, service_content)?;
-
-    Command::new("systemctl")
-        .arg("--user")
-        .arg("daemon-reload")
-        .output()?;
-    Command::new("systemctl")
-        .arg("--user")
-        .arg("enable")
-        .arg("usbackup.service")
-        .output()?;
-
-    println!("Service installed and enabled. Start it with:");
-    println!("  systemctl --user start usbackup.service");
     Ok(())
 }
 
@@ -457,7 +417,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             println!("USBackup {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        Some("--install-service") => install_systemd_service(),
+        Some("--install-service") => service::install(),
         Some("approve") => cmd_approve(&rest[1..]).await,
         Some("list-devices") => {
             cmd_list_devices();
