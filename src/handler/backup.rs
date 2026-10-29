@@ -25,7 +25,8 @@ use crate::sync::SyncError;
 // otherwise mark it allowed or remove it.
 #[allow(dead_code)]
 pub async fn trigger_backup(device_config: &DeviceConfig) {
-    inner_trigger_backup(device_config, None).await;
+    let mut dc = device_config.clone();
+    inner_trigger_backup(&mut dc, None).await;
 }
 
 pub async fn trigger_backup_by_uuid(_vid: u16, _pid: u16, uuid: &str) -> Option<DeviceConfig> {
@@ -106,7 +107,8 @@ pub async fn trigger_backup_by_uuid(_vid: u16, _pid: u16, uuid: &str) -> Option<
             );
             if crate::storage::verify_signature(&conf, &main_config.secret_key) {
                 info!("Local config loaded and verified from {:?}", mount_point);
-                inner_trigger_backup(&conf, Some(mount_point)).await;
+                let mut conf = conf;
+                inner_trigger_backup(&mut conf, Some(mount_point)).await;
                 return Some(conf);
             } else {
                 error!("SECURITY ALERT: Invalid signature for local config on {:?}. The config may have been tampered with or created on another machine.", mount_point);
@@ -128,7 +130,7 @@ pub async fn trigger_backup_by_uuid(_vid: u16, _pid: u16, uuid: &str) -> Option<
 }
 
 async fn inner_trigger_backup(
-    device_config: &DeviceConfig,
+    device_config: &mut DeviceConfig,
     pre_found_mount: Option<std::path::PathBuf>,
 ) {
     info!("Preparing backup for {}", device_config.name);
@@ -256,6 +258,25 @@ async fn inner_trigger_backup(
         info!("Disk detected on: {:?}", usb_path);
 
         notifications::notify_backup_start(&device_config.name);
+
+        let tuning = resolve_tuning(device_config, &usb_path);
+        if let Some(t) = &tuning {
+            if !t.hard_links {
+                for rule in &device_config.backup_rules {
+                    if rule.incremental {
+                        warn!(
+                            "Smart probe: target does not support hard links; incremental snapshots will copy instead of link"
+                        );
+                    }
+                }
+            }
+            if t.free_bytes > 0 && t.free_bytes < 64 * 1024 * 1024 {
+                warn!(
+                    "Smart probe: low free space on {:?}: {} bytes",
+                    usb_path, t.free_bytes
+                );
+            }
+        }
 
         let mut has_errors = false;
         for rule in &device_config.backup_rules {
@@ -510,8 +531,9 @@ async fn inner_trigger_backup(
                 let rule_owned = rule.clone();
                 let dest = full_dest.clone();
                 let pb_progress = pb.clone();
+                let tuning_for_task = tuning.clone();
                 let join = tokio::task::spawn_blocking(move || {
-                    run_engine_sync(&rule_owned, &dest, pb_progress)
+                    run_engine_sync(&rule_owned, &dest, pb_progress, tuning_for_task.as_ref())
                 })
                 .await;
                 pb.finish_and_clear();
@@ -677,6 +699,7 @@ fn run_engine_sync(
     rule: &BackupRule,
     dest: &Path,
     progress: ProgressBar,
+    tuning: Option<&crate::tune::Tuning>,
 ) -> Result<String, SyncError> {
     use crate::sync::filter::Filter;
     use crate::sync::{RetentionPolicy, SnapshotStore, SyncEngine};
@@ -692,7 +715,10 @@ fn run_engine_sync(
         // The filter must reach the store: without it an incremental backup
         // would ignore --exclude/.gitignore, while rsync's --link-dest path
         // honours them. This keeps the two paths' exclusions in parity.
-        let store = SnapshotStore::new(dest).with_filter(filter);
+        let mut store = SnapshotStore::new(dest).with_filter(filter);
+        if let Some(t) = tuning {
+            store = store.with_params(t.into());
+        }
         store
             .create_snapshot(src, &RetentionPolicy::default())
             .map(|r| {
@@ -705,7 +731,7 @@ fn run_engine_sync(
                 )
             })
     } else {
-        let engine = SyncEngine {
+        let mut engine = SyncEngine {
             exclude: filter,
             progress: Some(Box::new(move |p| {
                 progress.set_position(p.bytes_done.saturating_mul(100) / p.bytes_total.max(1));
@@ -713,12 +739,47 @@ fn run_engine_sync(
             })),
             ..SyncEngine::default()
         };
+        if let Some(t) = tuning {
+            engine = engine.with_params(t.into());
+        }
         engine.run(src, dest, rule.delete_missing).map(|s| {
             format!(
                 "{} copied, {} removed, {} symlinks preserved ({} errors)",
                 s.files_copied, s.files_removed, s.symlinks_preserved, s.errors
             )
         })
+    }
+}
+
+fn resolve_tuning(
+    device_config: &mut DeviceConfig,
+    usb_path: &Path,
+) -> Option<crate::tune::Tuning> {
+    if !crate::tune::enabled() {
+        return None;
+    }
+    match crate::tune::probe(usb_path) {
+        Ok(t) => {
+            info!(
+                "Smart tuning for {}: metadata_concurrency={}, bulk_concurrency={}, buffer_size={}, bulk_threshold={}, hard_links={}, symlinks={}, free_bytes={}",
+                device_config.name,
+                t.metadata_concurrency,
+                t.bulk_concurrency,
+                t.buffer_size,
+                t.bulk_threshold,
+                t.hard_links,
+                t.symlinks,
+                t.free_bytes
+            );
+            if let Some(note) = &t.note {
+                info!("Smart tuning note: {}", note);
+            }
+            Some(t)
+        }
+        Err(e) => {
+            warn!("Smart probe failed for {:?}: {}; using defaults", usb_path, e);
+            None
+        }
     }
 }
 
@@ -813,7 +874,7 @@ mod engine_e2e {
         let dir = tempdir().unwrap();
         let (rule, dst) = setup(dir.path(), false);
 
-        run_engine_sync(&rule, &dst, ProgressBar::hidden()).expect("sync succeeds");
+        run_engine_sync(&rule, &dst, ProgressBar::hidden(), None).expect("sync succeeds");
 
         assert_eq!(fs::read(dst.join("keep.txt")).unwrap(), b"keep");
         assert!(
@@ -828,7 +889,7 @@ mod engine_e2e {
         let dir = tempdir().unwrap();
         let (rule, dst) = setup(dir.path(), true);
 
-        run_engine_sync(&rule, &dst, ProgressBar::hidden()).expect("snapshot succeeds");
+        run_engine_sync(&rule, &dst, ProgressBar::hidden(), None).expect("snapshot succeeds");
 
         // The snapshot lives under dst/backups/<dir>/; the manifest names it.
         let store = SnapshotStore::new(&dst);

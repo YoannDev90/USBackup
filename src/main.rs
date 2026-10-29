@@ -7,6 +7,7 @@ mod notifications;
 mod service;
 mod storage;
 mod sync;
+mod tune;
 mod tui_lock;
 
 use crate::storage::{load_config, PendingDevice};
@@ -38,6 +39,10 @@ Log verbosity flags (combinable with any command):
   -q,  --quiet              warn   — warnings and errors only
   RUST_LOG=<filter>         overrides the flags above
                                    (e.g. RUST_LOG=usbackup::handler=debug)
+
+Smart probe flags (combinable with any command):
+  --smart                   Probe target key before backup and tune engine
+  --reprobe                 Force re-probe even if tuning persisted
 
 Examples:
   cargo run -- --verbose
@@ -409,6 +414,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             "-q" | "--quiet" => quiet = true,
             "-v" | "--verbose" => verbosity = (verbosity + 1).min(2),
             "-vv" => verbosity = 2,
+            "--smart" => crate::tune::set_enabled(true),
+            "--reprobe" => crate::tune::set_reprobe(true),
             other => rest.push(other.to_string()),
         }
     }
