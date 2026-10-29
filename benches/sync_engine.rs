@@ -19,6 +19,8 @@
 
 #[path = "../src/sync/mod.rs"]
 mod sync;
+#[path = "../src/tune/mod.rs"]
+mod tune;
 
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use std::fs;
@@ -51,7 +53,7 @@ fn seed_sized(root: &Path, prefix: &str, count: usize, size: usize) {
 /// Bound every group so a slow I/O bench does not run for minutes: criterion
 /// takes at least `sample_size` samples, so a 1 s/iter bench is capped at
 /// ~10 s of measurement rather than 100 samples.
-fn tune(group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>) {
+fn bound(group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>) {
     group.warm_up_time(Duration::from_secs(2));
     group.measurement_time(Duration::from_secs(5));
     group.sample_size(10);
@@ -63,13 +65,31 @@ fn sweeps_only() -> bool {
     std::env::var_os("USBACKUP_BENCH_SWEEPS_ONLY").is_some()
 }
 
+/// Probe the target mount (TMPDIR) and report the derived tuning. Registered
+/// first so it runs before any heavy seed on removable media.
+fn bench_smart_probe(c: &mut Criterion) {
+    let dir = tempfile::TempDir::new().unwrap();
+    match tune::probe(dir.path()) {
+        Ok(tuning) => eprintln!("smart_probe derived tuning: {tuning:?}"),
+        Err(e) => eprintln!("smart_probe failed: {e}"),
+    }
+    let mut group = c.benchmark_group("smart_probe");
+    bound(&mut group);
+    group.bench_function("probe", |b| {
+        b.iter(|| {
+            let _ = tune::probe(dir.path());
+        })
+    });
+    group.finish();
+}
+
 /// Metadata throughput: how fast we can stat a tree (the floor of any run).
 fn bench_scan(c: &mut Criterion) {
     if sweeps_only() {
         return;
     }
     let mut group = c.benchmark_group("scan");
-    tune(&mut group);
+    bound(&mut group);
     for count in [10_000usize, 100_000] {
         let dir = TempDir::new().unwrap();
         seed_small(dir.path(), count);
@@ -97,7 +117,7 @@ fn bench_sync(c: &mut Criterion) {
         .unwrap();
 
     let mut group = c.benchmark_group("sync_10k");
-    tune(&mut group);
+    bound(&mut group);
     group.throughput(Throughput::Elements(10_000));
 
     group.bench_function("cold", |b| {
@@ -131,7 +151,7 @@ fn bench_sync(c: &mut Criterion) {
         .unwrap();
 
     let mut group = c.benchmark_group("sync_100k");
-    tune(&mut group);
+    bound(&mut group);
     group.throughput(Throughput::Elements(100_000));
 
     group.bench_function("cold", |b| {
@@ -172,7 +192,7 @@ fn bench_snapshot(c: &mut Criterion) {
         .unwrap();
 
     let mut group = c.benchmark_group("snapshot_incremental");
-    tune(&mut group);
+    bound(&mut group);
     group.throughput(Throughput::Elements(10_000));
     group.bench_function("link_10k", |b| {
         b.iter(|| {
@@ -193,7 +213,7 @@ fn bench_metadata_concurrency(c: &mut Criterion) {
     let dst = dir.path().join("dst");
 
     let mut group = c.benchmark_group("metadata_concurrency");
-    tune(&mut group);
+    bound(&mut group);
     group.throughput(Throughput::Elements(10_000));
     for n in [1usize, 2, 4, 8, 16, 32] {
         let engine = SyncEngine {
@@ -225,7 +245,7 @@ fn bench_bulk_concurrency(c: &mut Criterion) {
     let dst = dir.path().join("dst");
 
     let mut group = c.benchmark_group("bulk_concurrency");
-    tune(&mut group);
+    bound(&mut group);
     group.throughput(Throughput::Bytes(4 * 8 * 1024 * 1024));
     for n in [1usize, 2, 4, 8] {
         let engine = SyncEngine {
@@ -260,7 +280,7 @@ fn bench_bulk_threshold(c: &mut Criterion) {
     let dst = dir.path().join("dst");
 
     let mut group = c.benchmark_group("bulk_threshold");
-    tune(&mut group);
+    bound(&mut group);
     for kib in [64u64, 256, 1_024, 4_096] {
         let engine = SyncEngine {
             bulk_threshold: kib * 1024,
@@ -286,6 +306,8 @@ fn bench_bulk_threshold(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    // Gentle probe first: safe on removable media.
+    bench_smart_probe,
     // The gating sweeps first: on removable media their results must be on
     // disk before any heavy seed is attempted (see file header).
     bench_bulk_concurrency,
