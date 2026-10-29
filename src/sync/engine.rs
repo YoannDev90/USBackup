@@ -266,9 +266,11 @@ impl SyncEngine {
         }
 
         // --- Phase B: files in two concurrent pools -------------------------
+        // Remove of a directory is deferred to Phase C so it cannot race with
+        // the removal of its (destination-only) children.
         let files: Vec<&PlanItem> = plan
             .iter()
-            .filter(|i| i.action != Action::CreateDir)
+            .filter(|i| i.action != Action::CreateDir && !(i.action == Action::Remove && i.meta.is_dir))
             .collect();
         if !files.is_empty() {
             let (bulk, meta): (Vec<&PlanItem>, Vec<&PlanItem>) =
@@ -290,6 +292,15 @@ impl SyncEngine {
                     });
                 });
             });
+        }
+
+        // --- Phase C: prune destination-only directories -------------------
+        let remove_dirs: Vec<&PlanItem> = plan
+            .iter()
+            .filter(|i| i.action == Action::Remove && i.meta.is_dir)
+            .collect();
+        for item in remove_dirs {
+            self.execute_item(&state, src_root, dst_root, item);
         }
 
         // Cancellation is cooperative: if it was requested, surface it so the
