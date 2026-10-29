@@ -108,7 +108,11 @@ flowchart TB
     E --> F[Read .usbackup.toml]
     F --> G{HMAC valid?}
     G -->|No| H([Security alert])
-    G -->|Yes| I[rsync --link-dest / --delete]
+    G -->|Yes| S{--smart?}
+    S -->|Yes| T[Probe key + tune engine]
+    S -->|No| U[Default knobs]
+    T --> I[Sync: rsync or sync-engine]
+    U --> I
     I --> J[Post-backup: script + unmount]
     J --> K([Notifications])
 ```
