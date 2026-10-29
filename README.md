@@ -22,14 +22,14 @@ $ usbackup
 - **Zero-trust config** — backup rules live *on the key* (`.usbackup.toml`) and are HMAC-SHA256 signed with a per-machine secret; a tampered or foreign config is rejected outright.
 - **UUID + VID/PID identification** — each key is matched by filesystem UUID *and* the vendor/product IDs of the device that triggered the event, so a second plugged-in key is never misidentified.
 - **Three device actions** — `Whitelist` (auto-backup), `AskEachTime` (confirm each plug-in), `IgnoreForever` (skip silently).
-- **Incremental snapshots** — `rsync --link-dest` hard-link versioning with a `latest` symlink; minimal disk usage, full history. Disabled on Windows (see [Windows notes](#windows-notes)).
-- **Auto-mount / unmount** — `udisksctl` mount on detection, optional unmount after a successful backup (resolved to the real block device node).
+- **Incremental snapshots** — `rsync --link-dest` hard-link versioning with a `latest` symlink; minimal disk usage, full history. Disabled on Windows ([details](docs/windows.md#behaviour--quirks)).
+- **Auto-mount / unmount** — `udisksctl` mount on detection on Linux (Windows and macOS mount volumes natively), optional unmount after a successful backup (resolved to the real block device node).
 - **Smart exclusions** — per-rule excludes, bundled defaults, optional `.gitignore` templates fetched from GitHub, and local `.gitignore` detection.
-- **Headless-safe** — under systemd (no TTY) unknown devices are queued as *pending* and a desktop notification tells you to run `usbackup approve <uuid>`.
+- **Headless-safe** — without a TTY (systemd, launchd, scheduled task) unknown devices are queued as *pending* and a desktop notification tells you to run `usbackup approve <uuid>`.
 - **Post-backup actions** — run a shell command and/or unmount, with exit-code checking and error notifications.
-- **XDG paths** — `~/.config/usbackup/` (config, `0600`) and `~/.local/share/usbackup/logs/` (per-device rsync logs, rotated at 10 MB).
+- **Platform-native paths** — config, logs and service files follow each OS convention (XDG, `%APPDATA%`, `~/Library`); see the [platform guides](#platform-guides).
 - **Interactive wizard** — first plug-in launches a guided setup (name, source folders, exclusions, snapshot mode, unmount, post-script).
-- **Systemd service** — one flag to install and enable a user service.
+- **Background service** — one flag installs and enables the native user-level agent (systemd, Task Scheduler or launchd).
 - **Verbose logging** — `-v` (debug) / `-vv` (trace) / `-q` (warn), or `RUST_LOG` for fine-grained control.
 - **Native sync engine** — opt-in pure-Rust backend (`--features sync-engine`) that runs in-process with no external `rsync`; see [Native sync engine](#native-sync-engine-opt-in).
 
@@ -38,57 +38,29 @@ $ usbackup
 | OS | Status | Notes |
 | :-- | :-- | :-- |
 | **Linux** | ✅ | Native `udev` + `udisksctl`. Releases ship amd64 and arm64 binaries. |
-| **Windows** | ✅ | WMI discovery + native auto-mount, Task Scheduler service, `incremental` off (see [Windows notes](#windows-notes)). Releases ship x64 and arm64 `.exe`. |
+| **Windows** | ✅ | WMI discovery + native auto-mount, Task Scheduler service, `incremental` off ([details](docs/windows.md#behaviour--quirks)). Releases ship x64 and arm64 `.exe`. |
 | **macOS** | ✅ | `diskutil` discovery + mount, launchd LaunchAgent service, universal binary (Apple Silicon + Intel). |
 
 ## Installation
 
-### Dependencies (Linux)
-
-| Distro | Command |
-| :-- | :-- |
-| Debian / Ubuntu | `sudo apt install libudev-dev pkg-config rsync` |
-| Fedora / RHEL | `sudo dnf install libudev-devel pkg-config rsync` |
-
-`udisksctl` (part of `udisks2`) is also required at runtime.
-
-### Requirements (Windows)
-
-- **rsync** — a native MSVC build such as [nuket/rsync-windows](https://github.com/nuket/rsync-windows) (x64 / arm64), present on `PATH` as `rsync`.
-- Nothing else: Windows mounts removable drives by itself, so there is no `udisksctl` equivalent to install.
-
-### Requirements (macOS)
-
-- **Nothing to install** — `rsync` and `diskutil` ship with macOS, and volumes auto-mount under `/Volumes`.
-
-### Quick install (curl)
+### Quick install (Linux / macOS)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/YoannDev90/USBackup/master/install.sh | bash
 ```
 
-The script detects your OS/arch (Linux amd64/arm64, macOS universal), downloads the latest release binary, verifies its SHA256 checksum, installs it to `~/.local/bin`, and offers to set up the background agent service (systemd on Linux, launchd on macOS).
+Detects your OS/arch (Linux amd64/arm64, macOS universal), verifies the
+SHA256 checksum, installs to `~/.local/bin`, and offers to set up the
+background agent (systemd on Linux, launchd on macOS).
 
-<details>
-<summary>Installer options</summary>
-
-```bash
-# pass flags after `--` when piping:
-curl -fsSL ... | bash -s -- --prefix ~/.local/bin   # custom install dir
-curl -fsSL ... | bash -s -- --version 0.1.0          # pin a version
-curl -fsSL ... | bash -s -- --no-service             # skip the service prompt
-curl -fsSL ... | bash -s -- --force                  # overwrite existing binary
-```
-
-</details>
-
-### Quick install (PowerShell)
+### Quick install (Windows)
 
 ```powershell
 irm https://raw.githubusercontent.com/YoannDev90/USBackup/master/install.ps1 | iex
 ```
 
-The script resolves the latest release, verifies its SHA256 checksum, installs the binary to `%LOCALAPPDATA%\Programs\USBackup`, and offers to register the scheduled task — the same flow as `install.sh`. Saved to disk it also accepts `-Prefix`, `-Version`, `-NoService` and `-Force`.
+Same flow as `install.sh`: checksum verification, install to
+`%LOCALAPPDATA%\Programs\USBackup`, optional scheduled task.
 
 ### Build from source
 
@@ -101,57 +73,13 @@ cargo build --release
 
 Or grab a prebuilt binary from the [Releases](https://github.com/YoannDev90/USBackup/releases) page (includes SHA256 checksums).
 
-### Run as a user service
+### Platform guides
 
-**Linux (systemd user service):**
+Dependencies, service setup, platform behaviour and file locations:
 
-```bash
-usbackup --install-service
-systemctl --user start usbackup.service
-```
-
-**Windows (Task Scheduler, runs at logon):**
-
-```powershell
-USBackup.exe --install-service
-schtasks /Run /TN USBackup
-```
-
-The task runs in your interactive session (not Session 0), so toast
-notifications and `%APPDATA%` access keep working.
-
-**macOS (launchd LaunchAgent, loads at login):**
-
-```bash
-usbackup --install-service
-launchctl kickstart gui/$(id -u)/com.usbackup.agent
-```
-
-The agent runs in your user session, so desktop notifications and
-`/Volumes` access keep working; logs go to `~/Library/Logs/usbackup.log`.
-
-### Windows notes
-
-- **Discovery & mounting** — devices come from WMI (`Win32_DiskDrive` joined
-  to `Win32_LogicalDisk` by volume serial); Windows mounts removable drives
-  itself, so there is no `udisksctl` step.
-- **Incremental snapshots are off** — the native
-  [nuket/rsync-windows](https://github.com/nuket/rsync-windows) port cannot
-  create the hard links `--link-dest` relies on, so `incremental` is forced
-  to `false` at backup time (a warning is logged when a key asks for it) and
-  every backup runs as a plain mirror: no `latest` link, no snapshot history.
-  Linux keeps both.
-- **SmartScreen** — release `.exe` files are not code-signed yet; SmartScreen
-  may prompt on first launch ("More info" → "Run anyway").
-
-### macOS notes
-
-- **Discovery & mounting** — partitions come from `diskutil list -plist
-  external physical` and USB ids from `system_profiler`; volumes auto-mount
-  under `/Volumes`.
-- **Gatekeeper** — release binaries are not signed or notarized yet. If
-  macOS blocks the downloaded binary, clear the quarantine attribute:
-  `xattr -d com.apple.quarantine ~/.local/bin/USBackup`.
+- **[Linux](docs/linux.md)** — distro packages, systemd user service, udev + `udisksctl`, XDG paths.
+- **[Windows](docs/windows.md)** — rsync MSVC port, Task Scheduler task, WMI discovery, quirks.
+- **[macOS](docs/macos.md)** — launchd LaunchAgent, `diskutil` discovery, Gatekeeper, universal binary.
 
 ## Quick start
 
@@ -176,7 +104,7 @@ flowchart TB
     A([USB key plugged]) -->|hotplug| B[Agent]
     B --> C{Whitelisted?}
     C -->|No| D[Ignore / Ask /<br/>pending queue]
-    C -->|Yes| E[Mount via udisksctl]
+    C -->|Yes| E[Mount the key]
     E --> F[Read .usbackup.toml]
     F --> G{HMAC valid?}
     G -->|No| H([Security alert])
@@ -186,7 +114,7 @@ flowchart TB
 ```
 
 1. **Detect** — `nusb` hotplug events, no polling.
-2. **Identify** — scan `udev` for USB partitions, match by VID/PID of the triggering device, read the filesystem UUID.
+2. **Identify** — resolve the USB partitions of the triggering device (`udev` on Linux, WMI on Windows, `diskutil` on macOS), match by VID/PID, read the filesystem UUID.
 3. **Authorize** — check the UUID against the local whitelist / ask-each-time / ignore lists.
 4. **Verify** — mount the key, read `.usbackup.toml`, check the HMAC-SHA256 signature against the machine-local secret. A mismatch (tampering, config from another machine) aborts the backup and raises a security alert.
 5. **Execute** — for each backup rule, run `rsync` (optionally `--link-dest` snapshots, `--delete` mirror mode), then post-backup actions.
@@ -196,7 +124,7 @@ flowchart TB
 | Action | Behaviour |
 | :-- | :-- |
 | `Whitelist` | Backup runs automatically on every plug-in. |
-| `AskEachTime` | A confirmation prompt appears on every plug-in (TTY only; skipped under systemd with a notification). |
+| `AskEachTime` | A confirmation prompt appears on every plug-in (TTY only; skipped when headless with a notification). |
 | `IgnoreForever` | Device is silently skipped. |
 
 ### Example `.usbackup.toml` (on the key)
@@ -223,13 +151,9 @@ post_backup_script = "notify-send 'Backup done!'"
 
 ### File locations
 
-| What | Path |
-| :-- | :-- |
-| Local config (secret key + whitelists) | `~/.config/usbackup/backup_config.toml` (`0600`) |
-| Pending device queue | `~/.config/usbackup/pending_devices.toml` |
-| Per-device rsync logs | `~/.local/share/usbackup/logs/<name>.log` |
-| systemd user service (Linux) | `~/.config/systemd/user/usbackup.service` |
-| launchd LaunchAgent (macOS) | `~/Library/LaunchAgents/com.usbackup.agent.plist` |
+Config, logs and service definitions live where each platform expects
+them — see the *File locations* table in the [platform guides](#platform-guides)
+([linux](docs/linux.md#file-locations) · [windows](docs/windows.md#file-locations) · [macos](docs/macos.md#file-locations)).
 
 ## Native sync engine (opt-in)
 
@@ -314,7 +238,7 @@ usbackup approve ABCD-1234 --configure  # approve + launch the wizard now
 usbackup --install-service            # set up the background service
 ```
 
-When the agent runs **without a TTY** (e.g. under systemd), unknown devices are recorded as *pending* and a desktop notification tells you to run `usbackup approve <uuid>` from a terminal.
+When the agent runs **without a TTY** (as a background service), unknown devices are recorded as *pending* and a desktop notification tells you to run `usbackup approve <uuid>` from a terminal.
 
 ## Development
 
@@ -332,7 +256,7 @@ Unit tests cover the HMAC sign/verify round-trip, tamper detection, canonical se
 - [x] Decentralized TOML configuration stored on the key.
 - [x] HMAC-SHA256 signature verification.
 - [x] Automatic partition mounting via `udisksctl`.
-- [x] XDG config and log paths.
+- [x] Platform-native config and log paths (XDG, `%APPDATA%`, `~/Library`).
 - [x] Incremental snapshots (`--link-dest`).
 - [x] Post-backup actions (script + unmount, supervised).
 - [x] Desktop notifications.
