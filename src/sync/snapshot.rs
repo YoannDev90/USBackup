@@ -134,6 +134,8 @@ pub struct SnapshotStore {
     /// `--exclude` patterns plus a local `.gitignore`). [`Filter::none`] means
     /// "copy everything", the behaviour before this field existed.
     filter: Filter,
+    /// Tunable engine knobs applied to the snapshot copy.
+    engine_params: crate::sync::engine::EngineParams,
 }
 
 impl SnapshotStore {
@@ -145,6 +147,7 @@ impl SnapshotStore {
             backups_dir: root.join(BACKUPS_DIR),
             manifest_path: root.join(MANIFEST_DIR).join(MANIFEST_FILE),
             filter: Filter::none(),
+            engine_params: crate::sync::engine::EngineParams::default(),
         }
     }
 
@@ -154,6 +157,16 @@ impl SnapshotStore {
     pub fn with_filter(mut self, filter: Filter) -> Self {
         self.filter = filter;
         self
+    }
+
+    /// Apply a bundle of tunable engine knobs.
+    pub fn with_params(mut self, params: crate::sync::engine::EngineParams) -> Self {
+        self.engine_params = params;
+        self
+    }
+    /// Alias for [`SnapshotStore::with_params`].
+    pub fn with_engine_params(self, params: crate::sync::engine::EngineParams) -> Self {
+        self.with_params(params)
     }
 
     /// Read the manifest; a missing file is a fresh, empty manifest.
@@ -254,7 +267,8 @@ impl SnapshotStore {
         let engine = SyncEngine {
             base_root: base_dir,
             ..SyncEngine::default()
-        };
+        }
+        .with_params(self.engine_params);
         let stats = engine.execute(src_root, &new_dir, &plan)?;
         if stats.errors > 0 {
             // Surface a partial failure so callers can report it, but the

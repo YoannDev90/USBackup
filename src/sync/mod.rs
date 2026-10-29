@@ -46,7 +46,7 @@ pub use copy::{copy_file_atomic, is_temp_file};
 pub use delta::{DeltaPolicy, DeltaScript};
 pub use digest::{file_digest, FileDigest};
 pub use durability::{Durability, FlushJournal};
-pub use engine::{SyncEngine, WorkClass};
+pub use engine::{EngineParams, SyncEngine, WorkClass};
 pub use error::{Result, SyncError};
 pub use link::{link_or_copy, LinkOutcome};
 pub use meta::{copy_metadata, set_mtime, PreservedMeta};

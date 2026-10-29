@@ -78,6 +78,26 @@ thread_local! {
     static COPY_BUF: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
+/// Plain data bundle of the four tunable engine knobs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EngineParams {
+    pub metadata_concurrency: usize,
+    pub bulk_concurrency: usize,
+    pub buffer_size: usize,
+    pub bulk_threshold: u64,
+}
+
+impl Default for EngineParams {
+    fn default() -> Self {
+        EngineParams {
+            metadata_concurrency: DEFAULT_METADATA_CONCURRENCY,
+            bulk_concurrency: DEFAULT_BULK_CONCURRENCY,
+            buffer_size: DEFAULT_BUFFER_SIZE,
+            bulk_threshold: DEFAULT_BULK_THRESHOLD,
+        }
+    }
+}
+
 /// How the engine classifies and runs work. See the module docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkClass {
@@ -148,6 +168,18 @@ impl std::fmt::Debug for SyncEngine {
 }
 
 impl SyncEngine {
+    /// Apply a bundle of tunable knobs.
+    pub fn with_params(mut self, params: EngineParams) -> Self {
+        self.metadata_concurrency = params.metadata_concurrency;
+        self.bulk_concurrency = params.bulk_concurrency;
+        self.buffer_size = params.buffer_size;
+        self.bulk_threshold = params.bulk_threshold;
+        self
+    }
+    /// Alias for [`SyncEngine::with_params`].
+    pub fn with_engine_params(self, params: EngineParams) -> Self {
+        self.with_params(params)
+    }
     /// Shared, lock-free run counters. All increments are `Relaxed` (they are
     /// informational); the scope join provides the happens-before edge for the
     /// final read.
