@@ -136,6 +136,7 @@ jobs:
         name: Publish Homebrew formula
         needs: github-release
         runs-on: ubuntu-latest
+        continue-on-error: true
         steps:
           - name: Checkout homebrew tap
             uses: actions/checkout@v4
