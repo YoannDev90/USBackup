@@ -259,7 +259,7 @@ async fn inner_trigger_backup(
 
         notifications::notify_backup_start(&device_config.name);
 
-        let tuning = resolve_tuning(device_config, &usb_path);
+        let tuning = resolve_tuning(&device_config, &usb_path);
         if let Some(t) = &tuning {
             if !t.hard_links {
                 for rule in &device_config.backup_rules {
@@ -752,7 +752,7 @@ fn run_engine_sync(
 }
 
 fn resolve_tuning(
-    device_config: &mut DeviceConfig,
+    device_config: &DeviceConfig,
     usb_path: &Path,
 ) -> Option<crate::tune::Tuning> {
     if !crate::tune::enabled() {
