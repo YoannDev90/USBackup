@@ -10,6 +10,12 @@
 //! - `snapshot_incremental` — second+ snapshot: the hard-link fast path.
 //! - `metadata_concurrency` / `bulk_concurrency` — the two pool sizes.
 //! - `bulk_threshold` — size cutoff between the metadata and bulk pools.
+//!
+//! On removable media (TMPDIR pointed at a USB key) the seeds run before any
+//! filtered benchmark, and a cheap flash controller can reset under the
+//! 10k/100k-file metadata storm — so the three gating sweeps are registered
+//! FIRST (results hit the disk incrementally, per benchmark), and
+//! `USBACKUP_BENCH_SWEEPS_ONLY=1` skips the scale groups entirely.
 
 #[path = "../src/sync/mod.rs"]
 mod sync;
@@ -51,8 +57,17 @@ fn tune(group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTi
     group.sample_size(10);
 }
 
+/// Skip the 10k/100k scale groups: their seeding alone can reset a cheap
+/// flash controller when TMPDIR lives on removable media (see file header).
+fn sweeps_only() -> bool {
+    std::env::var_os("USBACKUP_BENCH_SWEEPS_ONLY").is_some()
+}
+
 /// Metadata throughput: how fast we can stat a tree (the floor of any run).
 fn bench_scan(c: &mut Criterion) {
+    if sweeps_only() {
+        return;
+    }
     let mut group = c.benchmark_group("scan");
     tune(&mut group);
     for count in [10_000usize, 100_000] {
@@ -69,6 +84,9 @@ fn bench_scan(c: &mut Criterion) {
 /// End-to-end sync: cold copy into an empty destination, and the verify-only
 /// path when the destination already matches the source.
 fn bench_sync(c: &mut Criterion) {
+    if sweeps_only() {
+        return;
+    }
     let dir = TempDir::new().unwrap();
     let src_10k = dir.path().join("src10k");
     seed_small(&src_10k, 10_000);
@@ -141,6 +159,9 @@ fn bench_sync(c: &mut Criterion) {
 /// Second-and-later snapshot of an unchanged tree: every file is a hard link,
 /// so this is the ×1000 path that makes frequent snapshots affordable.
 fn bench_snapshot(c: &mut Criterion) {
+    if sweeps_only() {
+        return;
+    }
     let dir = TempDir::new().unwrap();
     let src = dir.path().join("src");
     seed_small(&src, 10_000);
@@ -265,11 +286,13 @@ fn bench_bulk_threshold(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    // The gating sweeps first: on removable media their results must be on
+    // disk before any heavy seed is attempted (see file header).
+    bench_bulk_concurrency,
+    bench_bulk_threshold,
+    bench_metadata_concurrency,
     bench_scan,
     bench_sync,
-    bench_snapshot,
-    bench_metadata_concurrency,
-    bench_bulk_concurrency,
-    bench_bulk_threshold
+    bench_snapshot
 );
 criterion_main!(benches);
