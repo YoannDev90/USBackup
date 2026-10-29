@@ -131,3 +131,74 @@ jobs:
                     artifacts/SHA256SUMS \
                     --title "Release $TAG_NAME" \
                     --latest
+
+  publish-homebrew:
+    name: Publish Homebrew formula
+    needs: github-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: YoannDev90/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Download release checksums
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/rel
+          gh release download "${{ github.event.inputs.tag_name }}" \
+            --repo "${{ github.repository }}" \
+            --pattern "SHA256SUMS" --dir /tmp/rel
+
+      - name: Generate and commit formula
+        env:
+          TAG_NAME: ${{ github.event.inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          cd tap
+          mkdir -p Formula
+          VERSION="${TAG_NAME#v}"
+          AMD_SHA=$(awk '/usbackup-linux-amd64$/ {print $1}' /tmp/rel/SHA256SUMS)
+          ARM_SHA=$(awk '/usbackup-linux-arm64$/ {print $1}' /tmp/rel/SHA256SUMS)
+          MAC_SHA=$(awk '/usbackup-macos-universal$/ {print $1}' /tmp/rel/SHA256SUMS)
+
+          cat > Formula/usbackup.rb <<EOF
+          class Usbackup < Formula
+            desc "Automated USB backup agent"
+            homepage "https://github.com/YoannDev90/USBackup"
+            version "${VERSION}"
+            if OS.mac?
+              url "https://github.com/YoannDev90/USBackup/releases/download/${TAG_NAME}/usbackup-macos-universal"
+              sha256 "${MAC_SHA}"
+            end
+            if OS.linux?
+              if Hardware::CPU.arm?
+                url "https://github.com/YoannDev90/USBackup/releases/download/${TAG_NAME}/usbackup-linux-arm64"
+                sha256 "${ARM_SHA}"
+              else
+                url "https://github.com/YoannDev90/USBackup/releases/download/${TAG_NAME}/usbackup-linux-amd64"
+                sha256 "${AMD_SHA}"
+              end
+            end
+            license "MIT"
+
+            def install
+              if OS.mac?
+                bin.install "usbackup-macos-universal" => "usbackup"
+              elsif Hardware::CPU.arm?
+                bin.install "usbackup-linux-arm64" => "usbackup"
+              else
+                bin.install "usbackup-linux-amd64" => "usbackup"
+              end
+            end
+          end
+          EOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/usbackup.rb
+          git commit -m "usbackup ${VERSION}" || echo "nothing to commit"
+          git push
