@@ -7,6 +7,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`--smart` flag** — before a backup, probe the target key (bounded in
+  files, bytes and wall time) and derive the engine tuning
+  (`metadata_concurrency`, `bulk_concurrency`, `buffer_size`,
+  `bulk_threshold`) plus capability info (hard links, symlinks, free
+  space). Shared `src/tune` module used by both the CLI and the criterion
+  bench (`smart_probe` group). Probe failures degrade gracefully to
+  defaults; a backup is never blocked by the probe.
+  - `--reprobe` forces a fresh probe even when a tuning is already known.
+  - Tuning is applied to both the plain sync and incremental snapshot paths
+    via `EngineParams` / `SyncEngine::with_params` /
+    `SnapshotStore::with_params`; `Tuning::sanitized()` clamps persisted
+    values.
+  - Capability alerts: warns when the target lacks hard-link support on an
+    incremental rule, and on low free space.
+
 - **Pure-Rust sync engine** — an in-process, portable alternative to the
   external `rsync` binary, gated behind the `sync-engine` cargo feature.
   Off by default: `rsync` remains the shipped backend until the engine is
