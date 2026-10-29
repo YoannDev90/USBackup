@@ -49,13 +49,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   with a shared public API (`find_usb_partitions`,
   `find_partition_by_uuid`, `mount_partition`, `unmount_by_mount_point`,
   `is_removable_mount`, `to_devnode`) and a matching `src/service/`
-  module (systemd on Linux, Task Scheduler on Windows, launchd stub).
+  module (systemd on Linux, Task Scheduler on Windows, launchd on macOS).
+- **macOS support** — USBackup now runs natively on macOS (universal
+  binary for Apple Silicon and Intel):
+  - Device discovery through `diskutil list -plist external physical`
+    (with a per-disk fallback for volumes without a UUID) and
+    `system_profiler SPUSBDataType -json` for the USB vendor/product ids;
+    volumes auto-mount under `/Volumes`, so no udisks equivalent is
+    involved.
+  - Background agent via a launchd LaunchAgent
+    (`usbackup --install-service` + `usbackup.plist`) loaded into the
+    user's `gui` domain with `launchctl bootstrap`; logs at
+    `~/Library/Logs/usbackup.log`.
+  - **`install.sh` supports Darwin** — fetches the universal
+    `usbackup-macos-universal` asset and falls back to `shasum -a 256`
+    for the checksum (macOS ships no `sha256sum`).
+  - **`usbackup daemon`** is now an accepted explicit argument: the
+    service templates pass it (the Windows task previously exited with
+    code 2 at every logon because `main.rs` rejected it).
 
 ### Changed
 
 - **Dependency checks are platform-aware** — `rsync` + `udisksctl` on
-  Linux, `rsync` only on Windows (the OS auto-mounts); the macOS arm
-  (`rsync` + `diskutil`) is in place for the port in progress.
+  Linux, `rsync` only on Windows (the OS auto-mounts), `rsync` +
+  `diskutil` on macOS.
+- **Documentation split per platform** — OS-specific details
+  (dependencies, service setup, behaviour, file locations) moved from
+  the README to `docs/linux.md`, `docs/windows.md` and `docs/macos.md`;
+  the README stays platform-neutral and links to the guides.
 
 ### CI
 
@@ -63,6 +84,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   test on `windows-latest` next to Ubuntu; `release.yml` builds
   `usbackup-windows-x64.exe` and `usbackup-windows-arm64.exe` and attaches
   them to the release with SHA256SUMS.
+- **macOS legs** — `rust.yml` also runs on `macos-latest` (tests +
+  smoke test), every OS leg runs to completion (`fail-fast: false`), and
+  Ubuntu cross-checks the macOS target through `scripts/check-macos.sh`
+  (stub-libc `cargo check`, no Apple SDK needed); `release.yml` builds
+  both Apple targets and merges them with `lipo` into
+  `usbackup-macos-universal`.
 
 ## [0.1.0] — 2026-10-15
 
