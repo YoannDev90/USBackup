@@ -315,82 +315,8 @@ async fn inner_trigger_backup(
                 has_errors = true;
                 continue;
             }
-
-            #[cfg(not(feature = "sync-engine"))]
+            // Sync engine path (default backend since sync-engine feature is enabled)
             {
-                // Use rsync for efficient synchronization
-                let mut cmd = TokioCommand::new("rsync");
-                // -a: archive, -v: verbose, -P: progress and partial.
-                // No -z: this is a local USB transfer, compression wastes CPU.
-                cmd.arg("-avP");
-
-                if rule.delete_missing {
-                    cmd.arg("--delete");
-                }
-
-                // Add exclusions
-                for pattern in &rule.exclude {
-                    cmd.arg(format!("--exclude={}", pattern));
-                }
-
-                // Automatic .gitignore detection
-                if let Ok(gitignore_path) = find_local_gitignore(&rule.source_path) {
-                    info!(
-                        "Using local .gitignore exclusions from {:?}",
-                        gitignore_path
-                    );
-                    cmd.arg(format!(
-                        "--exclude-from={}",
-                        gitignore_path.to_string_lossy()
-                    ));
-                }
-
-                // Incremental snapshots handling
-                let final_dest = if rule.incremental {
-                    let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-                    let snapshot_path = full_dest.join(&timestamp);
-                    let latest_link = full_dest.join("latest");
-
-                    if latest_link.exists() {
-                        debug!("link-dest: reusing hard links from {:?}", latest_link);
-                        cmd.arg(format!("--link-dest={}", latest_link.to_string_lossy()));
-                    } else {
-                        debug!("No 'latest' link yet; first snapshot for {:?}", full_dest);
-                    }
-
-                    if let Err(e) = std::fs::create_dir_all(&snapshot_path) {
-                        error!(
-                            "Unable to create snapshot directory {:?}: {}",
-                            snapshot_path, e
-                        );
-                        has_errors = true;
-                        continue;
-                    }
-                    snapshot_path
-                } else {
-                    full_dest.clone()
-                };
-
-                cmd.arg(&rule.source_path).arg(&final_dest);
-                cmd.stdout(std::process::Stdio::piped());
-                cmd.stderr(std::process::Stdio::piped());
-
-                debug!("Spawning: {:?}", cmd);
-
-                let mut child = match cmd.spawn() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        error!("Failed to spawn rsync: {}", e);
-                        has_errors = true;
-                        continue;
-                    }
-                };
-
-                let stdout = child.stdout.take().unwrap();
-                let stderr = child.stderr.take().unwrap();
-                let mut stdout_reader = BufReader::new(stdout).lines();
-                let mut stderr_reader = BufReader::new(stderr).lines();
-
                 let pb = ProgressBar::new(100);
                 pb.set_style(
                     ProgressStyle::with_template(
@@ -407,75 +333,23 @@ async fn inner_trigger_backup(
                         .to_string_lossy()
                 ));
 
-                let mut full_output = String::new();
-                let mut error_output = String::new();
-
-                loop {
-                    tokio::select! {
-                        line = stdout_reader.next_line() => {
-                            match line {
-                                Ok(Some(l)) => {
-                                    // Rsync --progress outputs lines like:
-                                    //       32,768   0%    0.00kB/s    0:00:00
-                                    if l.contains('%') {
-                                        let parts: Vec<&str> = l.split_whitespace().collect();
-                                        for part in parts {
-                                            if part.contains('%') {
-                                                let pct_str = part.trim_end_matches('%');
-                                                if let Ok(pct) = pct_str.parse::<u64>() {
-                                                    pb.set_position(pct);
-                                                }
-                                            }
-                                        }
-                                    }
-                                    full_output.push_str(&l);
-                                    full_output.push('\n');
-                                }
-                                _ => break,
-                            }
-                        }
-                        line = stderr_reader.next_line() => {
-                            if let Ok(Some(l)) = line {
-                                error_output.push_str(&l);
-                                error_output.push('\n');
-                            }
-                        }
-                    }
-                }
-
-                let status = child.wait().await;
+                // The engine is synchronous (blocking I/O): run it off the async
+                // executor with spawn_blocking, the pattern main.rs already uses.
+                let rule_owned = rule.clone();
+                let dest = full_dest.clone();
+                let pb_progress = pb.clone();
+                let tuning_for_task = tuning.clone();
+                let join = tokio::task::spawn_blocking(move || {
+                    run_engine_sync(&rule_owned, &dest, pb_progress, tuning_for_task.as_ref())
+                })
+                .await;
                 pb.finish_and_clear();
 
-                match status {
-                    Ok(s) if s.success() => {
+                match join {
+                    Ok(Ok(summary)) => {
                         info!("Success for {}", rule.source_path);
-                        debug!(
-                            "rsync exit 0; captured {} bytes of stdout for the device log",
-                            full_output.len()
-                        );
-                        append_to_log(&device_config.name, &rule.source_path, &full_output);
-
-                        // Update 'latest' symlink for incremental backups
-                        if rule.incremental {
-                            let latest_link = full_dest.join("latest");
-                            if latest_link.exists() {
-                                let _ = std::fs::remove_file(&latest_link);
-                            }
-                            // Need the relative path for the symlink to be portable
-                            if let Some(snapshot_name) = final_dest.file_name() {
-                                // Windows: directory symlinks need Developer Mode or
-                                // admin rights, so creation is best-effort.
-                                #[cfg(unix)]
-                                let _ = std::os::unix::fs::symlink(snapshot_name, &latest_link);
-                                #[cfg(windows)]
-                                let _ = std::os::windows::fs::symlink_dir(
-                                    snapshot_name,
-                                    &latest_link,
-                                );
-                            }
-                        }
-
-                        // Post-backup script: run to completion and check the exit code
+                        debug!("sync-engine summary: {}", summary);
+                        append_to_log(&device_config.name, &rule.source_path, &summary);
                         if let Some(script) = &rule.post_backup_script {
                             if !run_post_backup_script(
                                 script,
@@ -488,25 +362,27 @@ async fn inner_trigger_backup(
                             }
                         }
                     }
-                    Ok(s) => {
-                        let code = s.code().unwrap_or(-1);
-                        error!("Rsync failed with code {} for {}", code, rule.source_path);
+                    Ok(Err(e)) => {
+                        error!("Sync engine failed for {}: {}", rule.source_path, e);
                         notifications::notify_backup_error(
                             &device_config.name,
-                            &format!("rsync error (code {}). Check the logs.", code),
+                            "Sync error. Check the logs.",
                         );
                         append_to_log(
                             &device_config.name,
                             &rule.source_path,
-                            &format!("FAILED (code {})\n{}", code, error_output),
+                            &format!("FAILED: {}", e),
                         );
                         has_errors = true;
                     }
                     Err(e) => {
-                        error!("Error waiting for rsync: {}", e);
+                        error!("Sync task join error for {}: {}", rule.source_path, e);
                         has_errors = true;
                     }
                 }
+            }
+            #[cfg(feature = "sync-engine")]
+            {
             }
             #[cfg(feature = "sync-engine")]
             {

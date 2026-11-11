@@ -3,7 +3,7 @@ name = "USBackup"
 version = "1.0.0"
 edition = "2021"
 rust-version = "1.75"
-description = "Automated USB backup agent: detects USB keys and runs signed rsync backups"
+description = "Automated USB backup agent: detects USB keys and runs signed backups using the pure-Rust sync engine"
 license = "MIT"
 readme = "README.md"
 
@@ -45,10 +45,10 @@ wmi = "0.15"
 plist = "1"
 
 [features]
-default = []
-# Use the pure-Rust sync engine instead of the external `rsync` binary.
-# Off by default: the engine stays opt-in until it is validated end-to-end on
-# Linux, macOS and Windows (rsync remains the shipped fallback).
+default = ["sync-engine"]
+# Pure-Rust sync engine that replaces the external `rsync` binary.
+# Enabled by default: the engine is the default backend; `rsync` is no longer
+# required and will be removed in a future release.
 sync-engine = []
 
 [dev-dependencies]

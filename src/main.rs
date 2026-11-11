@@ -33,8 +33,8 @@ Commands (default = daemon):
 
 Log verbosity flags (combinable with any command):
   (none)                    info   — normal runtime events
-  -v,  --verbose            debug  — USB scan details, rsync command
-                                   lines, mount search, config decisions
+  -v,  --verbose            debug  — USB scan details, sync engine lines,
+                                   mount search, config decisions
   -vv                       trace  — everything, incl. per-line hotplug
   -q,  --quiet              warn   — warnings and errors only
   RUST_LOG=<filter>         overrides the flags above
@@ -52,54 +52,11 @@ Examples:
 In a terminal the agent prompts interactively for unknown devices.
 Under systemd (no TTY) it stores them as pending and sends a desktop
 notification; approve them with `usbackup approve <uuid>`.";
-/// Check that a command exists in $PATH without shelling out to `which`
-/// (which is not present on minimal systems).
-fn command_in_path(cmd: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|paths| {
-            std::env::split_paths(&paths).any(|dir| {
-                candidate_commands(&dir, cmd)
-                    .iter()
-                    .any(|candidate| candidate.is_file())
-            })
-        })
-        .unwrap_or(false)
-}
-
-/// Candidate file names for `cmd` inside `dir`. Windows resolves bare
-/// names through PATHEXT (`.COM`, `.EXE`, ...), so `rsync` only matches
-/// there if the extension is appended by hand.
-#[cfg(windows)]
-fn candidate_commands(dir: &std::path::Path, cmd: &str) -> Vec<std::path::PathBuf> {
-    let mut names = vec![dir.join(cmd)];
-    let pathext =
-        std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
-    for ext in pathext.split(';').filter(|ext| !ext.is_empty()) {
-        names.push(dir.join(format!("{}{}", cmd, ext)));
-    }
-    names
-}
-
-#[cfg(not(windows))]
-fn candidate_commands(dir: &std::path::Path, cmd: &str) -> Vec<std::path::PathBuf> {
-    vec![dir.join(cmd)]
-}
-
+/// Check that required tools are available.
+/// Since the sync-engine is now the default backend, the external `rsync` binary
+/// is no longer required. This function currently passes (nothing essential to
+/// check beyond what the engine handles internally).
 fn check_dependencies() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Windows mounts USB keys through the OS (auto-mount); there is no
-    // udisksctl equivalent to require there.
-    #[cfg(target_os = "linux")]
-    let deps = ["rsync", "udisksctl"];
-    #[cfg(target_os = "macos")]
-    let deps = ["rsync", "diskutil"];
-    #[cfg(target_os = "windows")]
-    let deps = ["rsync"];
-    for dep in deps {
-        if !command_in_path(dep) {
-            error!("Missing dependency: {}", dep);
-            return Err(format!("The tool '{}' is required but is not installed.", dep).into());
-        }
-    }
     Ok(())
 }
 
