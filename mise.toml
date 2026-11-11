@@ -1,0 +1,28 @@
+# USBackup – mise configuration
+# Project tooling: `mise install` then `mise run <task>`.
+# Run `mise setup-hooks` once to install git hooks.
+
+[env]
+# Add Cargo binaries and the directory where usbackup is installed to PATH.
+PATH = "$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+
+[tools]
+# Tool versions managed by mise.
+pre-commit = "4.6.2"
+
+[tasks]
+# Tasks that `mise run <name>` understands.
+build = { description = "Build the project in debug mode", run = "cargo build" }
+check = { description = "Check compilation without creating a binary", run = "cargo check" }
+test = { description = "Run unit tests", run = "cargo test" }
+clippy = { description = "Run Clippy lint", run = "cargo clippy" }
+fmt = { description = "Format source code", run = "cargo fmt" }
+run = { description = "Run the binary directly from source", run = "cargo run" }
+bench = { description = "Run benchmarks (if any)", run = "cargo bench" }
+install-service = { description = "Install the background agent service", run = "usbackup --install-service" }
+clean = { description = "Clean build artifacts", run = "cargo clean" }
+setup-hooks = { description = "Install git hooks (pre‑commit + commit‑msg)", run = "pre-commit install && pre-commit install --hook-type commit-msg" }
+
+[hooks]
+# This hook is called after `mise install`; you can keep it or remove it.
+postinstall = "mise setup-hooks"
