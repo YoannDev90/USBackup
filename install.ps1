@@ -27,7 +27,7 @@ $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $Repo = 'YoannDev90/USBackup'
-$BinName = 'USBackup.exe'
+$BinName = 'usbackup.exe'
 $Api = "https://api.github.com/repos/$Repo/releases"
 
 function Info { param([string]$Msg) Write-Host "  + $Msg" -ForegroundColor Green }

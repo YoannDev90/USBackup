@@ -16,7 +16,7 @@
 set -euo pipefail
 
 REPO="YoannDev90/USBackup"
-BIN_NAME="USBackup"
+BIN_NAME="usbackup"
 INSTALL_PREFIX="${HOME}/.local/bin"
 REQUESTED_VERSION=""
 INSTALL_SERVICE="ask"   # ask | yes | no

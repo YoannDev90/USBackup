@@ -1,5 +1,5 @@
 [Unit]
-Description=USBackup - Automatic USB Backup Service
+Description=usbackup - Automatic USB Backup Service
 
 [Service]
 Type=simple
